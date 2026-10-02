@@ -12,8 +12,13 @@ class EmuTest(EmulatorTestCase):
         self.lua.call("emu.resume() emu.warp(false)")
 
     def test_frame_counter_advances(self) -> None:
+        # The emulation runs on its own, at 50 frames per second. On a
+        # machine which is busy with other tests it can be held up for a
+        # while, so it is given some seconds to get ten frames on.
         first = self.lua.eval("emu.frame()")
-        time.sleep(0.5)
+        deadline = time.monotonic() + 10
+        while self.lua.eval("emu.frame()") <= first + 10 and time.monotonic() < deadline:
+            time.sleep(0.1)
         self.assertGreater(self.lua.eval("emu.frame()"), first + 10)
 
     def test_wait_next_frame(self) -> None:
