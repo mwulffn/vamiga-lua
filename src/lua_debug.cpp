@@ -1,5 +1,5 @@
-// Lua breakpoints, instruction stepping and exception watches (the dbg
-// table).
+// Lua breakpoints, instruction stepping, exception watches (the dbg table)
+// and memory taps (mem.tap_*).
 //
 // The breakpoints and catchpoints of the vAmiga core are used to make the
 // emulator pause, and the Lua side is handled here on the main thread while
@@ -367,8 +367,8 @@ static int l_dbg_go(lua_State *L)
 }
 
 // dbg.wait(frames) waits until the emulation stops and returns a table
-// describing why: {reason = "breakpoint", "exception", "halt", "step" or
-// "pause", pc = ..., id = ..., address = ...}. If frames is given and the
+// describing why: {reason = "breakpoint", "tap", "exception", "halt",
+// "step" or "pause", pc = ..., id = ..., address = ...}. If frames is given and the
 // emulation has not stopped after that many frames, nothing is returned.
 static int l_dbg_wait(lua_State *L)
 {
@@ -490,24 +490,147 @@ function dbg.measure(from, to, count, frames)
 end
 )LUA";
 
-// Memory taps (callbacks for the memory accesses of the CPU) need a hook in
-// the CPU emulation which the vAmiga core does not have. The functions exist
-// so that scripts fail with a message which says so.
-static int l_mem_tap_unavailable(lua_State *L)
+// Memory taps
+//
+// The core calls memory_observer for every data access of the CPU while
+// there are taps. That happens on the emulator thread, in the middle of an
+// instruction. The main thread is waiting for the emulator to pause at that
+// time (in host_run), so the Lua callback is run right there, on the
+// emulator thread, and can give the CPU another value.
+//
+// Functions of the core which wait for the emulator thread cannot be used
+// from that thread. The Lua functions which need them (the state, media and
+// input functions and a few of the emu ones) raise an error in a tap
+// callback (see engine_check_not_in_tap).
+
+struct lua_tap {
+    int id;
+    u32 first, last;
+    bool write;
+    int callback;
+};
+
+// The UAE core has room for about this many, and scripts written for it can
+// depend on the error.
+#define MAX_TAPS 20
+
+static std::vector<lua_tap> g_taps;
+static bool g_in_tap;
+
+void engine_check_not_in_tap(lua_State *L)
 {
-    return luaL_error(L, "memory taps are not available with the vAmiga core");
+    if (g_in_tap) {
+        luaL_error(L, "this function cannot be used in a tap callback");
+    }
 }
 
-// mem.tap_remove() is accepted, as there is never a tap to remove.
+static u32 memory_observer(void *context, u32 addr, u32 value, isize size, bool write)
+{
+    lua_State *L = g_engine_state;
+    // An access a callback causes is not reported.
+    if (g_in_tap || L == NULL) {
+        return value;
+    }
+    u32 last = addr + (u32) size - 1;
+    for (size_t i = 0; i < g_taps.size(); i++) {
+        const lua_tap &tap = g_taps[i];
+        if (tap.write != write || last < tap.first || addr > tap.last) {
+            continue;
+        }
+        int id = tap.id;
+        u32 mask = size == 4 ? 0xffffffff : (1u << (size * 8)) - 1;
+        bool was_stopped = engine_stop_requested();
+        g_in_tap = true;
+        lua_rawgeti(L, LUA_REGISTRYINDEX, tap.callback);
+        lua_pushinteger(L, addr);
+        lua_pushinteger(L, value & mask);
+        lua_pushinteger(L, size);
+        lua_pushinteger(L, core().cpu.getPC0());
+        if (lua_pcall(L, 4, 1, 0) != LUA_OK) {
+            engine_log_error(L, "Error in tap callback");
+        } else {
+            if (lua_isinteger(L, -1)) {
+                value = (u32) lua_tointeger(L, -1) & mask;
+            }
+            lua_pop(L, 1);
+        }
+        g_in_tap = false;
+        if (!was_stopped && engine_stop_requested()) {
+            engine_stop("tap", id, addr);
+            // Makes the emulator pause when the instruction has finished.
+            core().signalStop();
+        }
+        // Only the first tap which matches is run.
+        break;
+    }
+    return value;
+}
+
+static void update_memory_observer(void)
+{
+    core().cpu.memoryObserver = g_taps.empty() ? nullptr : memory_observer;
+}
+
+static int add_tap(lua_State *L, bool write)
+{
+    lua_Integer first = luaL_checkinteger(L, 1);
+    lua_Integer last = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, first >= 0 && first <= 0xffffffffLL, 1, "address out of range");
+    luaL_argcheck(L, last >= first && last <= 0xffffffffLL, 2, "address out of range");
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    if (g_taps.size() >= MAX_TAPS) {
+        return luaL_error(L, "too many taps");
+    }
+    lua_tap tap;
+    tap.id = g_next_id++;
+    tap.first = (u32) first;
+    tap.last = (u32) last;
+    tap.write = write;
+    lua_settop(L, 3);
+    tap.callback = luaL_ref(L, LUA_REGISTRYINDEX);
+    g_taps.push_back(tap);
+    update_memory_observer();
+    lua_pushinteger(L, tap.id);
+    return 1;
+}
+
+// mem.tap_read(first, last, callback) calls callback(address, value, size,
+// pc) when the CPU reads from the address range. If the callback returns an
+// integer, the CPU reads that value instead. Returns the id of the tap.
+// The callback is called for each bus access, and a 68000 accesses a long
+// word as two words. Instruction fetches and reads with PC-relative
+// addressing are not reported.
+static int l_mem_tap_read(lua_State *L)
+{
+    return add_tap(L, false);
+}
+
+// mem.tap_write(first, last, callback) is the same for writes. If the
+// callback returns an integer, that value is written instead.
+static int l_mem_tap_write(lua_State *L)
+{
+    return add_tap(L, true);
+}
+
+// mem.tap_remove(id) removes a tap, mem.tap_remove() removes all.
 static int l_mem_tap_remove(lua_State *L)
 {
+    bool all = lua_isnoneornil(L, 1);
+    lua_Integer id = all ? 0 : luaL_checkinteger(L, 1);
+    for (size_t i = g_taps.size(); i > 0; i--) {
+        if (all || g_taps[i - 1].id == id) {
+            luaL_unref(L, LUA_REGISTRYINDEX, g_taps[i - 1].callback);
+            g_taps.erase(g_taps.begin() + i - 1);
+        }
+    }
+    update_memory_observer();
     return 0;
 }
 
 static const luaL_Reg tap_functions[] = {
-    {"tap_read", l_mem_tap_unavailable},
+    {"tap_read", l_mem_tap_read},
     {"tap_remove", l_mem_tap_remove},
-    {"tap_write", l_mem_tap_unavailable},
+    {"tap_write", l_mem_tap_write},
     {NULL, NULL},
 };
 
@@ -526,6 +649,8 @@ void engine_open_dbg(lua_State *L)
 
 void engine_debug_free(void)
 {
+    g_taps.clear();
+    update_memory_observer();
     g_breakpoints.clear();
     g_exception_watches.clear();
     g_step_instructions = 0;

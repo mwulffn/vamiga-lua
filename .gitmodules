@@ -1,3 +1,4 @@
 [submodule "extern/silicium"]
 	path = extern/silicium
-	url = https://github.com/dirkwhoffmann/silicium.git
+	url = https://github.com/mwulffn/silicium.git
+	branch = vamiga-lua

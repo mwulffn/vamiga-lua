@@ -370,6 +370,7 @@ static int l_emu_warp(lua_State *L)
 
 static int l_emu_reset(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     if (lua_toboolean(L, 1)) {
         g_vamiga->hardReset();
     } else {
@@ -410,6 +411,7 @@ static int l_emu_config_get(lua_State *L)
 // knows for the option. Returns false if the value was not accepted.
 static int l_emu_config_set(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     Opt option = check_option(L, 1);
     bool is_number = lua_isinteger(L, 2);
     lua_Integer number = is_number ? lua_tointeger(L, 2) : 0;

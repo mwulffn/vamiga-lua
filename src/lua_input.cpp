@@ -149,6 +149,7 @@ static ControlPortAPI &control_port(int port)
 // and "return".
 static int l_input_key(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     KeyCode code = (KeyCode) check_named_code(L, 1, key_codes, "key");
     luaL_checktype(L, 2, LUA_TBOOLEAN);
     if (lua_toboolean(L, 2)) {
@@ -164,6 +165,7 @@ static int l_input_key(lua_State *L)
 // Releasing a direction puts the stick back in the middle on that axis.
 static int l_input_joy(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     static const struct {
         const char *name;
         GamePadAction press, release;
@@ -191,6 +193,7 @@ static int l_input_joy(lua_State *L)
 // input.mouse(dx, dy) moves the mouse in port 0.
 static int l_input_mouse(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     double dx = (double) luaL_checkinteger(L, 1);
     double dy = (double) luaL_checkinteger(L, 2);
     control_port(0).mouse.setDxDy(dx, dy);
@@ -201,6 +204,7 @@ static int l_input_mouse(lua_State *L)
 // 3 (middle).
 static int l_input_mouse_button(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     static const GamePadAction press[] = {
         GamePadAction::PRESS_LEFT, GamePadAction::PRESS_RIGHT, GamePadAction::PRESS_MIDDLE};
     static const GamePadAction release[] = {

@@ -14,24 +14,20 @@ run against either emulator.
 
 ## Status
 
-Stage 2 of 3. What is here:
+Stages 1 and 2 of 3 are done. What is here:
 
 | Table | Functions |
 | --- | --- |
 | `emu` | `frame`, `cycles`, `beam`, `timing`, `wait_frames`, `wait_next_frame`, `on_frame`, `remove_frame_callback`, `pause`, `resume`, `paused`, `step`, `warp`, `reset`, `quit`, `config_get`, `config_set`, `log` |
 | `cpu` | The registers as fields (`cpu.d0`, `cpu.a7`, `cpu.pc`, `cpu.sr`, ...), `disasm` |
-| `mem` | `read_u8/u16/u32`, `write_u8/u16/u32`, `peek_u8/u16/u32`, `poke_u8/u16/u32`, `read_range`, `write_range`, `custom` |
+| `mem` | `read_u8/u16/u32`, `write_u8/u16/u32`, `peek_u8/u16/u32`, `poke_u8/u16/u32`, `read_range`, `write_range`, `custom`, `tap_read`, `tap_write`, `tap_remove` |
 | `video` | `size`, `pixel`, `pixels`, `screenshot` |
 | `state` | `save`, `load`, `snapshot`, `restore` |
 | `media` | `insert`, `eject`, `path` |
 | `input` | `key`, `joy`, `mouse`, `mouse_button`, `port_mode`, `type` |
 | `dbg` | `bpset`, `bpclear`, `bplist`, `exset`, `exclear`, `step`, `go`, `wait`, `stopped`, `measure`, `load_symbols`, `unload_symbols`, `symbol`, `lookup` |
 
-Not here:
-
-- Memory taps (`mem.tap_read`, `mem.tap_write`). They need a hook in the CPU emulation which the
-  core does not have. The functions exist and raise an error which says so.
-- `dbg.command`, which runs a command of the UAE debugger in FS-UAE.
+Not here: `dbg.command`, which runs a command of the UAE debugger in FS-UAE.
 
 ## Building
 
@@ -43,9 +39,11 @@ cmake -B build
 cmake --build build -j
 ```
 
-The core comes from the [Silicium](https://github.com/dirkwhoffmann/silicium) repository
-(`extern/silicium`, pinned to a commit), which is where its author develops it now. Only
-`Cores/` is built; Qt is not needed. Lua 5.4 is in `extern/lua`.
+The core comes from a fork of the [Silicium](https://github.com/dirkwhoffmann/silicium)
+repository, which is where its author develops it now. The fork
+([mwulffn/silicium](https://github.com/mwulffn/silicium), branch `vamiga-lua`) adds one small
+hook for the memory taps; see `docs/upstream.md`. Only `Cores/` is built; Qt is not needed.
+Lua 5.4 is in `extern/lua`.
 
 ## Running
 
@@ -89,12 +87,19 @@ the emulator before the instruction at the address (or before the first instruct
 exception handler). A Lua callback is run on the main thread at that point, and the emulation is
 then continued. A callback costs about 13 microseconds.
 
+Memory taps are different: the core calls a function for every data access of the CPU, in the
+middle of the instruction, and the Lua callback is run there, on the emulator thread, while the
+main thread waits. It can give the CPU another value. A tap callback costs about 5 microseconds,
+and cannot use the functions which need the emulator to be paused (`state`, `media`, `input`).
+
 In warp mode, with every frame drawn, a demo runs at about 720 frames per second on an Apple
 Silicon Mac.
 
 ## Differences from the FS-UAE engine
 
-- No memory taps and no `dbg.command` (see Status).
+- No `dbg.command`.
+- Memory taps do not report instruction fetches or reads with PC-relative addressing, and a tap
+  callback cannot save or load states, change disks or send input.
 - The exception watches (`dbg.exset`) give the address of the instruction which caused the
   exception. The core does not keep it, so it is worked out from what the CPU saved on the stack.
   For a division by zero or CHK on a 68000 or 68010 the instruction is looked for in the words
@@ -121,7 +126,7 @@ cd tests
 AMIGA_TEST_KICKSTART=/path/to/kick13.rom AMIGA_TEST_MODEL=A500 ./run_tests.py
 ```
 
-132 tests in eleven modules, taken from the FS-UAE engine with few changes. They pass on the
+140 tests in eleven modules, taken from the FS-UAE engine with few changes. They pass on the
 A1000, A500, A500-ECS, A500+ and A1200 configurations (Kickstart 1.3, 2.04 and 3.1). Most boot a
 small disk image which they create themselves. `test_symbols` builds a program with vasm and
 vlink and puts it on a disk with xdftool (from amitools), and is skipped without them.
@@ -133,7 +138,8 @@ The code in `src`, `scripts` and `tests` is under the MIT licence (see `LICENSE`
 
 The parts it is built with have their own:
 
-- The vAmiga core (`extern/silicium`) is under the Mozilla Public License 2.0 and its CPU core
+- The vAmiga core (`extern/silicium`, with the change described in `docs/upstream.md`) is under
+  the Mozilla Public License 2.0 and its CPU core
   (Moira) under the MIT licence, according to the licence file of Silicium. The Silicium
   applications, which are not built or used here, are under the GNU General Public License 3.
 - Lua (`extern/lua`) is under the MIT licence.

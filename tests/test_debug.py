@@ -1,4 +1,4 @@
-"""Tests for breakpoints, stepping and exception watches (src/lua_debug.cpp)."""
+"""Tests for breakpoints, stepping, exception watches and memory taps (src/lua_debug.cpp)."""
 
 import unittest
 
@@ -146,14 +146,105 @@ class StepTest(DebugTestCase):
 
 
 class TapTest(DebugTestCase):
-    def test_taps_are_not_available(self) -> None:
-        # Taps need a hook in the CPU emulation, which the vAmiga core does
-        # not have.
-        with self.assertRaisesRegex(LuaError, "memory taps are not available"):
-            self.lua.call("mem.tap_write(0x70000, 0x70003, function() end)")
-        with self.assertRaisesRegex(LuaError, "memory taps are not available"):
-            self.lua.call("mem.tap_read(0x70000, 0x70003, function() end)")
-        self.lua.call("mem.tap_remove()")
+    def test_write_tap(self) -> None:
+        # Depending on the CPU emulation, the long word is written in one
+        # access or as two words. Tap the low word, which sees one of them.
+        self.lua.call(
+            f"writes = {{}} mem.tap_write({self.counter_address + 2}, {self.counter_address + 3}, "
+            "function(address, value, size, pc) writes[#writes + 1] = {address, value, size, pc} end)"
+        )
+        self.lua.call("emu.wait_frames(4)")
+        writes = self.lua.eval("writes")
+        self.assertGreaterEqual(len(writes), 3)
+        for i, (address, value, size, pc) in enumerate(writes):
+            self.assertIn(
+                (address, size), [(self.counter_address, 4), (self.counter_address + 2, 2)]
+            )
+            self.assertEqual(value & 0xFFFF, (writes[0][1] + i) & 0xFFFF)
+            # The instruction after ADDQ is MOVE.L D0,(A0). With 68030 or
+            # 68040 MMU emulation, the address of the next instruction is
+            # reported instead.
+            self.assertIn(pc, [self.addq + 2, self.addq + 4])
+
+    def test_write_tap_can_change_the_value(self) -> None:
+        self.lua.call(
+            f"mem.tap_write({self.counter_address}, {self.counter_address + 3}, "
+            "function(address, value, size) "
+            "if size == 4 then return 0x12345678 "
+            f"elseif address == {self.counter_address} then return 0x1234 "
+            "else return 0x5678 end end)"
+        )
+        self.lua.call("emu.wait_frames(2)")
+        self.assertEqual(self.counter(), 0x12345678)
+
+    def test_read_tap(self) -> None:
+        colour = self.program + harness.COLOUR_OFFSET
+        self.lua.call(
+            f"reads = {{}} mem.tap_read({colour}, {colour + 1}, "
+            "function(address, value, size, pc) reads[#reads + 1] = {address, value, size, pc} end)"
+        )
+        self.lua.call("emu.wait_frames(3)")
+        # MOVE.W 6(A0),$180(A5) is 12 bytes after ADDQ.
+        self.assertEqual(self.lua.eval("reads[1]"), [colour, 0x0F00, 2, self.addq + 12])
+
+    def test_read_tap_can_change_the_value(self) -> None:
+        self.lua.call(
+            "mem.tap_read(mem.custom.JOY1DAT, mem.custom.JOY1DAT + 1, function() return 0x1234 end)"
+        )
+        self.lua.call("emu.wait_frames(2)")
+        joystick = self.lua.eval(f"mem.peek_u16({self.program + harness.JOYSTICK_OFFSET})")
+        self.assertEqual(joystick, 0x1234)
+
+    def test_tap_can_stop_the_emulation(self) -> None:
+        tap_id = self.lua.eval(
+            f"mem.tap_write({self.counter_address}, {self.counter_address + 3}, "
+            "function() emu.pause() end)"
+        )
+        info = self.lua.eval("dbg.wait()")
+        self.assertEqual(info["reason"], "tap")
+        self.assertEqual(info["id"], tap_id)
+        self.assertEqual(info["address"], self.counter_address)
+        # The emulation stops after the instruction which wrote.
+        self.assertEqual(info["pc"], self.addq + 4)
+
+    def test_removed_tap_is_not_called(self) -> None:
+        tap_id = self.lua.eval(
+            f"mem.tap_write({self.counter_address}, {self.counter_address + 3}, "
+            "function() tap_calls = (tap_calls or 0) + 1 end)"
+        )
+        self.lua.call("emu.wait_frames(2)")
+        self.lua.call(f"mem.tap_remove({tap_id})")
+        calls = self.lua.eval("tap_calls")
+        self.lua.call("emu.wait_frames(3)")
+        self.assertEqual(self.lua.eval("tap_calls"), calls)
+
+    def test_memory_access_from_lua_does_not_run_taps(self) -> None:
+        self.lua.call("emu.pause()")
+        self.lua.call(
+            "lua_taps = 0 mem.tap_write(0x70000, 0x70003, function() lua_taps = lua_taps + 1 end)"
+        )
+        self.lua.call("mem.tap_read(0x70000, 0x70003, function() lua_taps = lua_taps + 1 end)")
+        self.lua.call("mem.write_u32(0x70000, 1) mem.poke_u32(0x70000, 2)")
+        self.assertEqual(
+            self.lua.call("return mem.read_u32(0x70000), mem.peek_u32(0x70000)"), [2, 2]
+        )
+        self.assertEqual(self.lua.eval("lua_taps"), 0)
+
+    def test_too_many_taps(self) -> None:
+        with self.assertRaisesRegex(LuaError, "too many taps"):
+            self.lua.call("for i = 1, 30 do mem.tap_write(0x70000, 0x70000, function() end) end")
+
+
+    def test_functions_which_cannot_be_used_in_a_tap(self) -> None:
+        # Tap callbacks run on the emulator thread, where a state cannot be
+        # saved. The error is logged, and the emulation continues.
+        self.lua.call(
+            f"mem.tap_write({self.counter_address}, {self.counter_address + 3}, function() "
+            "tap_ok, tap_error = pcall(state.snapshot) end)"
+        )
+        self.lua.call("emu.wait_frames(2)")
+        self.assertEqual(self.lua.eval("tap_ok"), False)
+        self.assertIn("cannot be used in a tap callback", self.lua.eval("tap_error"))
 
 
 class ExceptionTest(DebugTestCase):

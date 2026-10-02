@@ -152,6 +152,7 @@ static int l_media_insert(lua_State *L)
 
 static int l_media_eject(lua_State *L)
 {
+    engine_check_not_in_tap(L);
     int drive = check_drive(L, 1);
     g_vamiga->df[drive]->ejectDisk();
     g_disk_paths[drive].clear();

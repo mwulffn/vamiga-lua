@@ -68,8 +68,11 @@ void engine_push_stop_info(lua_State *L);
 // do). An exception is turned into a Lua error with the text of what and the
 // message of the exception. The Lua error is raised after the exception has
 // been destroyed, since raising it leaves the function with longjmp.
+void engine_check_not_in_tap(lua_State *L);
+
 template <class F> void engine_call(lua_State *L, const char *what, F &&f)
 {
+    engine_check_not_in_tap(L);
     bool failed = false;
     try {
         f();
@@ -110,6 +113,10 @@ void engine_debug_events(const std::vector<host_event> &events);
 // True while instructions are run one at a time for dbg.step.
 bool engine_debug_stepping(void);
 void engine_debug_free(void);
+// Raises a Lua error if called from a tap callback. Tap callbacks run on the
+// emulator thread, where the functions of the core which wait for that
+// thread cannot be used.
+void engine_check_not_in_tap(lua_State *L);
 
 // json.cpp
 
