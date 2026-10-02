@@ -463,6 +463,10 @@ void engine_init(int port)
     engine_open_mem(L);
     engine_open_state(L);
     engine_open_video(L);
+    // Adds functions to the mem table.
+    engine_open_dbg(L);
+    // Adds functions to the dbg table.
+    engine_open_symbols(L);
     if (port != 0) {
         engine_remote_open(port);
     }
@@ -477,6 +481,18 @@ void engine_load(const char *filename)
         return;
     }
     engine_start_task(L, 0);
+}
+
+bool engine_run(void)
+{
+    std::vector<host_event> events = host_run(engine_debug_stepping());
+    engine_debug_events(events);
+    for (const host_event &event : events) {
+        if (event.type == HOST_FRAME_END) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void engine_frame(void)
@@ -535,6 +551,7 @@ void engine_stopped_loop(void)
 void engine_free(void)
 {
     engine_remote_close();
+    engine_debug_free();
     for (engine_task *task : g_tasks) {
         delete task;
     }

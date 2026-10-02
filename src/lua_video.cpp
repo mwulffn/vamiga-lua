@@ -1,14 +1,16 @@
 // Lua access to the emulated display (the video table).
 //
-// The functions read the frame buffer of the core. Lua code runs between two
-// frames, so the buffer always holds the frame which was just finished.
+// The functions read the frame buffers of the core. Lua code runs between
+// two frames, so they hold the frames which were just finished.
 //
 // The core draws every raster line once, with one pixel per hires pixel. The
 // frame given to Lua leaves out the blanking areas to the left and at the
-// top, and has every line twice, so that the picture has the proportions it
-// has on a monitor.
+// top, and has two lines per raster line, so that the picture has the
+// proportions it has on a monitor (see video_frame).
 
 #include "engine.h"
+
+#include "Texture.h"
 
 #include <zlib.h>
 
@@ -36,17 +38,40 @@ static void texel_rgb(u32 texel, bool four_bits, u8 *out)
     }
 }
 
-// Copies one line of the frame to out as red, green and blue bytes. The
-// texture must be locked.
-static void copy_line_rgb(const u32 *texture, int y, u8 *out)
-{
-    bool four_bits = !core().denise.isAGA();
-    // The texture has two texels (super-hires pixels) per hires pixel.
-    const u32 *p = texture + (size_t) (FIRST_Y + y / 2) * HPIXELS * 2 + FIRST_X * 2;
-    for (int x = 0; x < FRAME_WIDTH; x++) {
-        texel_rgb(p[2 * x], four_bits, out + 3 * x);
+// The lines of the frame, as pointers into the textures of the core.
+//
+// The core keeps the last frames it has drawn. Without interlace, a line of
+// the frame is a line of the newest one, twice. With interlace, the frames
+// are alternately long and short, and are the two fields of one picture: the
+// lines of the long frame are the even lines and those of the short frame
+// the odd ones.
+//
+// The emulator is paused when Lua code runs, so the textures do not change
+// while they are read.
+struct video_frame {
+    const Texture *even;
+    const Texture *odd;
+    bool four_bits;
+
+    video_frame()
+    {
+        const Texture &newest = core().videoPort.getTexture(0);
+        const Texture &previous = core().videoPort.getTexture(-1);
+        bool interlaced = newest.lof != previous.lof;
+        even = interlaced && !newest.lof ? &previous : &newest;
+        odd = interlaced && newest.lof ? &previous : &newest;
+        four_bits = !core().denise.isAGA();
     }
-}
+
+    // Gives the red, green and blue values of a pixel.
+    void pixel(int x, int y, u8 *out) const
+    {
+        const Texture *texture = y % 2 ? odd : even;
+        // A texel holds the two super-hires pixels of a hires pixel.
+        Texel texel = texture->pixels.ptr[(size_t) (FIRST_Y + y / 2) * HPIXELS + FIRST_X + x];
+        texel_rgb((u32) texel, four_bits, out);
+    }
+};
 
 // video.size() returns the width and height of the frame in pixels.
 static int l_video_size(lua_State *L)
@@ -64,12 +89,8 @@ static int l_video_pixel(lua_State *L)
     lua_Integer y = luaL_checkinteger(L, 2);
     luaL_argcheck(L, x >= 0 && x < FRAME_WIDTH, 1, "outside the frame");
     luaL_argcheck(L, y >= 0 && y < FRAME_HEIGHT, 2, "outside the frame");
-    g_vamiga->videoPort.lockTexture();
-    const u32 *texture = g_vamiga->videoPort.getTexture();
-    u32 texel = texture[(size_t) (FIRST_Y + y / 2) * HPIXELS * 2 + (FIRST_X + x) * 2];
-    g_vamiga->videoPort.unlockTexture();
     u8 rgb[3];
-    texel_rgb(texel, !core().denise.isAGA(), rgb);
+    video_frame().pixel((int) x, (int) y, rgb);
     lua_pushinteger(L, rgb[0]);
     lua_pushinteger(L, rgb[1]);
     lua_pushinteger(L, rgb[2]);
@@ -79,14 +100,14 @@ static int l_video_pixel(lua_State *L)
 // Returns the frame as red, green and blue bytes, line by line.
 static std::vector<u8> frame_rgb(void)
 {
-    size_t line_size = (size_t) FRAME_WIDTH * 3;
-    std::vector<u8> pixels(line_size * FRAME_HEIGHT);
-    g_vamiga->videoPort.lockTexture();
-    const u32 *texture = g_vamiga->videoPort.getTexture();
+    video_frame frame;
+    std::vector<u8> pixels((size_t) FRAME_WIDTH * FRAME_HEIGHT * 3);
+    u8 *out = pixels.data();
     for (int y = 0; y < FRAME_HEIGHT; y++) {
-        copy_line_rgb(texture, y, pixels.data() + y * line_size);
+        for (int x = 0; x < FRAME_WIDTH; x++, out += 3) {
+            frame.pixel(x, y, out);
+        }
     }
-    g_vamiga->videoPort.unlockTexture();
     return pixels;
 }
 

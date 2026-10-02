@@ -34,6 +34,10 @@ void engine_init(int port);
 void engine_free(void);
 // Runs a Lua file as a task.
 void engine_load(const char *filename);
+// Runs the emulation until the end of the frame, or until a breakpoint or
+// something else stops it before that. The Lua callbacks of breakpoints and
+// exception watches are run from here. Returns true if the frame ended.
+bool engine_run(void);
 // Called when a frame has been emulated: runs frame callbacks, resumes the
 // tasks which are due, and handles remote requests.
 void engine_frame(void);
@@ -78,19 +82,34 @@ template <class F> void engine_call(lua_State *L, const char *what, F &&f)
     }
 }
 
+// Yields the calling task until the emulation stops, and returns the stop
+// information to it. If max_frames is not 0, the task also continues (with
+// no values returned) when that many frames have been emulated.
+int engine_yield_until_stopped(lua_State *L, lua_Integer max_frames);
+
 // Logs the error message on top of the stack and pops it.
 void engine_log_error(lua_State *L, const char *context);
 
 // Functions creating the global tables with the Lua API.
 
 void engine_open_cpu(lua_State *L);
+void engine_open_dbg(lua_State *L);
 void engine_open_input(lua_State *L);
 void engine_open_mem(lua_State *L);
 void engine_open_state(lua_State *L);
+void engine_open_symbols(lua_State *L);
 void engine_open_video(lua_State *L);
 
 // Records the path of a disk image which was inserted without media.insert.
 void engine_set_media_path(int drive, const std::string &path);
+
+// lua_debug.cpp
+
+// Handles what host_run returned, apart from the end of the frame.
+void engine_debug_events(const std::vector<host_event> &events);
+// True while instructions are run one at a time for dbg.step.
+bool engine_debug_stepping(void);
+void engine_debug_free(void);
 
 // json.cpp
 

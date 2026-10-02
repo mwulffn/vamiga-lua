@@ -22,10 +22,12 @@ VAmiga *g_vamiga;
 static bool g_warp;
 static bool g_quit_requested;
 
-// The emulator thread tells the main thread when it has paused.
+// The emulator thread tells the main thread when it has paused, and what
+// happened before that.
 static std::mutex g_pause_mutex;
 static std::condition_variable g_pause_condition;
 static long g_pause_count;
+static std::vector<host_event> g_events;
 
 void host_log(const char *format, ...)
 {
@@ -59,27 +61,59 @@ bool host_quit_requested(void)
 // Called by the core, on the emulator thread, for every message it sends.
 static void process_message(const void *listener, Message message)
 {
-    if (message.type == Msg::PAUSE) {
-        std::lock_guard<std::mutex> guard(g_pause_mutex);
-        g_pause_count++;
-        g_pause_condition.notify_one();
+    std::lock_guard<std::mutex> guard(g_pause_mutex);
+    switch (message.type) {
+        case Msg::EOF_REACHED:
+            g_events.push_back({HOST_FRAME_END, 0, -1});
+            break;
+        case Msg::BREAKPOINT_REACHED:
+            g_events.push_back({HOST_BREAKPOINT, message.cpu.pc, -1});
+            break;
+        case Msg::CATCHPOINT_REACHED:
+            g_events.push_back({HOST_EXCEPTION, message.cpu.pc, message.cpu.vector});
+            break;
+        case Msg::STEP:
+            g_events.push_back({HOST_STEP, 0, -1});
+            break;
+        case Msg::CPU_HALT:
+            g_events.push_back({HOST_HALT, 0, -1});
+            break;
+        case Msg::PAUSE:
+            g_pause_count++;
+            g_pause_condition.notify_one();
+            break;
+        default:
+            break;
     }
 }
 
-void host_run_frame(void)
+std::vector<host_event> host_run(bool single_step)
 {
     long target;
     {
         std::lock_guard<std::mutex> guard(g_pause_mutex);
         target = g_pause_count + 1;
+        g_events.clear();
     }
-    // The emulator runs until the end of the frame and pauses again. It
-    // sends the message that the end was reached before it has paused, so
-    // the message to wait for is the one about the pause.
-    g_vamiga->finishFrame();
-    g_vamiga->wakeUp();
+    // The emulator pauses at the end of the frame (this is what the
+    // finishFrame function of the core does), if nothing pauses it before
+    // that.
+    core().agnus.dmaDebugger.eofTrap = true;
+    // The emulator is set running directly. The run and stepInto functions
+    // of the core first check that the emulator is ready to run, which
+    // includes computing the checksum of the ROM, and that takes about as
+    // long as emulating a third of a frame. It was checked once, in main.
+    Emulator &emulator = core().emulator;
+    if (single_step) {
+        core().cpu.debugger.stepInto();
+    }
+    emulator.switchState(ExecState::RUNNING);
+    emulator.wakeUp();
+    // The messages about what happened are sent before the emulator has
+    // paused, so the one to wait for is the one about the pause.
     std::unique_lock<std::mutex> lock(g_pause_mutex);
     g_pause_condition.wait(lock, [&] { return g_pause_count >= target; });
+    return g_events;
 }
 
 static const struct {
@@ -154,7 +188,10 @@ int main(int argc, char *argv[])
     // program.
     signal(SIGPIPE, SIG_IGN);
 
-    VAmiga emulator;
+    // The emulator is never destroyed. Its destructor does not work before
+    // the emulator thread has been started, which is where the errors in the
+    // command line are found.
+    VAmiga &emulator = *new VAmiga;
     g_vamiga = &emulator;
     try {
         bool known = false;
@@ -200,6 +237,14 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    try {
+        // The emulator is not asked again whether it can run (see host_run).
+        emulator.isReady();
+    } catch (std::exception &e) {
+        fprintf(stderr, "%s\n", e.what());
+        return 1;
+    }
+
     engine_init(port);
     for (const std::string &script : scripts) {
         engine_load(script.c_str());
@@ -212,11 +257,15 @@ int main(int argc, char *argv[])
             next_frame_at = std::chrono::steady_clock::now();
             continue;
         }
+        bool frame_ended;
         try {
-            host_run_frame();
+            frame_ended = engine_run();
         } catch (std::exception &e) {
             host_log("The emulator cannot run: %s", e.what());
             break;
+        }
+        if (!frame_ended) {
+            continue;
         }
         if (!g_warp) {
             auto frame_time = std::chrono::duration<double>(1.0 / core().refreshRate());

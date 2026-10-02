@@ -26,9 +26,11 @@ add_executable(vamiga-lua
   src/engine.cpp
   src/json.cpp
   src/lua_cpu.cpp
+  src/lua_debug.cpp
   src/lua_input.cpp
   src/lua_mem.cpp
   src/lua_state.cpp
+  src/lua_symbols.cpp
   src/lua_video.cpp
   src/main.cpp
   src/remote.cpp

@@ -11,11 +11,15 @@
 
 #include "VAmiga.h"
 
+#include <cstdint>
+#include <vector>
+
 // The internals of the core. The public API in VAmiga.h does not offer
 // everything the Lua functions need (writing registers and memory, for
 // example), so they also use the components directly.
 #include "vaconfig.h"
 #include "Amiga.h"
+#include "Emulator.h"
 #include "Option.h"
 
 extern vamiga::VAmiga *g_vamiga;
@@ -23,8 +27,32 @@ extern vamiga::VAmiga *g_vamiga;
 // The components of the emulated Amiga.
 vamiga::Amiga &core(void);
 
-// Runs the emulation to the end of the current frame.
-void host_run_frame(void);
+// Something which made the emulator pause.
+enum host_event_type {
+    // The end of the frame was reached.
+    HOST_FRAME_END,
+    // The next instruction is at a breakpoint address.
+    HOST_BREAKPOINT,
+    // An exception was taken which has a catchpoint. The next instruction
+    // is the first one of the exception handler.
+    HOST_EXCEPTION,
+    // One instruction was run (when single stepping).
+    HOST_STEP,
+    // The CPU has halted (after a double fault).
+    HOST_HALT,
+};
+
+struct host_event {
+    host_event_type type;
+    uint32_t address;
+    int vector;
+};
+
+// Runs the emulation until the end of the current frame, or until something
+// else makes it pause: a breakpoint or a catchpoint set in the core, or, with
+// single_step, the end of the next instruction. Returns what happened, which
+// can be several things at once.
+std::vector<host_event> host_run(bool single_step);
 
 // While warp is off, frames are run at the speed of the Amiga.
 void host_set_warp(bool warp);

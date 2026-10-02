@@ -14,7 +14,7 @@ run against either emulator.
 
 ## Status
 
-Stage 1 of 3. What is here:
+Stage 2 of 3. What is here:
 
 | Table | Functions |
 | --- | --- |
@@ -25,9 +25,13 @@ Stage 1 of 3. What is here:
 | `state` | `save`, `load`, `snapshot`, `restore` |
 | `media` | `insert`, `eject`, `path` |
 | `input` | `key`, `joy`, `mouse`, `mouse_button`, `port_mode`, `type` |
+| `dbg` | `bpset`, `bpclear`, `bplist`, `exset`, `exclear`, `step`, `go`, `wait`, `stopped`, `measure`, `load_symbols`, `unload_symbols`, `symbol`, `lookup` |
 
-Not here yet: the debugger (`dbg`: breakpoints, stepping by instruction, memory taps, exception
-hooks, symbols, timing measurements). That is stage 2.
+Not here:
+
+- Memory taps (`mem.tap_read`, `mem.tap_write`). They need a hook in the CPU emulation which the
+  core does not have. The functions exist and raise an error which says so.
+- `dbg.command`, which runs a command of the UAE debugger in FS-UAE.
 
 ## Building
 
@@ -80,9 +84,24 @@ between two frames. Two runs of the same script give the same result, frame for 
 States are taken and loaded at once, at that same point. In 1,600 snapshot and restore cycles
 with a program reading a file in a loop (A500 and A1200 configurations) none failed.
 
+Breakpoints and exception watches use the breakpoints and catchpoints of the core, which pause
+the emulator before the instruction at the address (or before the first instruction of the
+exception handler). A Lua callback is run on the main thread at that point, and the emulation is
+then continued. A callback costs about 13 microseconds.
+
+In warp mode, with every frame drawn, a demo runs at about 720 frames per second on an Apple
+Silicon Mac.
+
 ## Differences from the FS-UAE engine
 
-- No `dbg` table yet.
+- No memory taps and no `dbg.command` (see Status).
+- The exception watches (`dbg.exset`) give the address of the instruction which caused the
+  exception. The core does not keep it, so it is worked out from what the CPU saved on the stack.
+  For a division by zero or CHK on a 68000 or 68010 the instruction is looked for in the words
+  before the saved PC, and for bus and address errors on a 68000 the saved PC is given, which is
+  some words past the instruction.
+- A halted CPU (`dbg.exset("halt")`) is noticed at the end of the frame, not at once.
+- With an interlaced screen, the frame holds both fields (the last two frames of the core).
 - `emu.config_get` and `emu.config_set` use the option names of the vAmiga core
   (`CPU.REVISION`, `MEM.CHIP_RAM`, ...), and numbers as values.
 - `state.save`, `state.snapshot`, `state.load` and `state.restore` take effect at once instead of
@@ -102,9 +121,11 @@ cd tests
 AMIGA_TEST_KICKSTART=/path/to/kick13.rom AMIGA_TEST_MODEL=A500 ./run_tests.py
 ```
 
-76 tests in seven modules, taken from the FS-UAE engine with few changes. They pass on the
-A1000, A500, A500-ECS, A500+ and A1200 configurations (Kickstart 1.3, 2.04 and 3.1). `test_cpu`
-and others boot a small disk image which they create themselves; no other software is needed.
+132 tests in eleven modules, taken from the FS-UAE engine with few changes. They pass on the
+A1000, A500, A500-ECS, A500+ and A1200 configurations (Kickstart 1.3, 2.04 and 3.1). Most boot a
+small disk image which they create themselves. `test_symbols` builds a program with vasm and
+vlink and puts it on a disk with xdftool (from amitools), and is skipped without them.
+`test_public_disk` downloads the free operating system EmuTOS and boots that.
 
 ## Licence
 
