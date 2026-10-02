@@ -65,12 +65,8 @@ scripts/amiga_lua.py --port 5600 'emu.wait_frames(500) return cpu.pc, video.scre
 Lua code is not sandboxed. Anything which can connect to the port can run code with the access
 of the process.
 
-The socket protocol is one line of JSON per request and reply:
-
-```
--> {"id": 7, "code": "return cpu.pc, mem.read_u16(0xdff004)"}
-<- {"id": 7, "ok": true, "results": [16515298, 8236], "output": ""}
-```
+The Lua functions, the socket protocol and the client are described in
+[docs/lua.md](docs/lua.md).
 
 ## How it works
 

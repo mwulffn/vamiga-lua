@@ -418,11 +418,7 @@ static int l_emu_config_set(lua_State *L)
     const char *text = is_number ? "" : luaL_checkstring(L, 2);
     bool accepted = true;
     try {
-        if (is_number) {
-            g_vamiga->set(option, (i64) number);
-        } else {
-            g_vamiga->set(option, OptionParser::parse(option, text));
-        }
+        host_set_option(option, is_number ? (i64) number : OptionParser::parse(option, text));
     } catch (std::exception &) {
         accepted = false;
     }

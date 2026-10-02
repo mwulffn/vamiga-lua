@@ -54,6 +54,10 @@ struct host_event {
 // can be several things at once.
 std::vector<host_event> host_run(bool single_step);
 
+// Changes an option of the core. Throws an exception if the value is not
+// accepted. The emulator must be paused (it is whenever Lua code runs).
+void host_set_option(vamiga::Opt option, vamiga::i64 value);
+
 // While warp is off, frames are run at the speed of the Amiga.
 void host_set_warp(bool warp);
 

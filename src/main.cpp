@@ -43,6 +43,17 @@ Amiga &core(void)
     return *g_vamiga->amiga.amiga;
 }
 
+void host_set_option(Opt option, i64 value)
+{
+    // The functions of the emulator object change the option at once. The
+    // ones in the public API put the change in a queue, which the emulator
+    // thread empties before it runs the next frame, so that Lua code would
+    // see the old value for a while.
+    Emulator &emulator = core().emulator;
+    emulator.check(option, value);
+    emulator.set(option, value);
+}
+
 void host_set_warp(bool warp)
 {
     g_warp = warp;
@@ -188,32 +199,35 @@ int main(int argc, char *argv[])
     // program.
     signal(SIGPIPE, SIG_IGN);
 
-    // The emulator is never destroyed. Its destructor does not work before
-    // the emulator thread has been started, which is where the errors in the
-    // command line are found.
+    // The emulator is never destroyed: the program ends by returning from
+    // main, also when there is an error in the command line.
     VAmiga &emulator = *new VAmiga;
     g_vamiga = &emulator;
+    const ConfigScheme *scheme = NULL;
+    for (const auto &entry : models) {
+        if (model == entry.name) {
+            scheme = &entry.scheme;
+        }
+    }
+    if (scheme == NULL) {
+        fprintf(stderr, "Unknown model '%s'\n", model.c_str());
+        return 2;
+    }
     try {
-        bool known = false;
-        for (const auto &entry : models) {
-            if (model == entry.name) {
-                emulator.set(entry.scheme);
-                known = true;
-            }
-        }
-        if (!known) {
-            fprintf(stderr, "Unknown model '%s'\n", model.c_str());
-            return 2;
-        }
+        // The emulator thread is started first: starting it puts the
+        // configuration back to its defaults. The listener must not be NULL
+        // for the function to be called.
+        emulator.launch(&emulator, process_message);
+        core().emulator.set(*scheme);
         // The core never waits for real time. This program does, in the
         // frame loop below, when warp is off.
-        emulator.set(Opt::AMIGA_WARP_MODE, (i64) Warp::ALWAYS);
+        host_set_option(Opt::AMIGA_WARP_MODE, (i64) Warp::ALWAYS);
         // In warp mode the core only draws some of the frames, unless it is
         // told to draw them all. Lua code must be able to see every frame.
-        emulator.set(Opt::DENISE_FRAME_SKIPPING, 0);
+        host_set_option(Opt::DENISE_FRAME_SKIPPING, 0);
         // The colours of the Amiga are given to Lua code as they are, and
         // not adjusted to look like they do on a monitor.
-        emulator.set(Opt::MON_PALETTE, (i64) Palette::RGB);
+        host_set_option(Opt::MON_PALETTE, (i64) Palette::RGB);
         for (const std::string &setting : settings) {
             size_t equals = setting.find('=');
             auto option = OptEnum::parseEnum(setting.substr(0, equals));
@@ -221,11 +235,9 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Unknown option in '--set %s'\n", setting.c_str());
                 return 2;
             }
-            emulator.set(*option, OptionParser::parse(*option, setting.substr(equals + 1)));
+            host_set_option(*option, OptionParser::parse(*option, setting.substr(equals + 1)));
         }
         emulator.mem.loadRom(rom);
-        // The listener must not be NULL for the function to be called.
-        emulator.launch(&emulator, process_message);
         for (int drive = 0; drive < 4; drive++) {
             if (!disks[drive].empty()) {
                 emulator.df[drive]->insert(disks[drive], false);
