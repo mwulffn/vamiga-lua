@@ -146,6 +146,7 @@ static void usage(void)
         "\n"
         "  --model <name>      A1000, A500 (default), A500-ECS, A500+ or A1200\n"
         "  --rom <file>        Kickstart ROM\n"
+        "  --ext <file>        Extension ROM (needed by the AROS ROM)\n"
         "  --df0 <file>        Disk image for drive DF0 (also --df1 to --df3)\n"
         "  --set <opt>=<value> Set an option of the vAmiga core, for example\n"
         "                      MEM.SLOW_RAM=512 (can be given several times)\n"
@@ -156,7 +157,7 @@ static void usage(void)
 
 int main(int argc, char *argv[])
 {
-    std::string model = "A500", rom;
+    std::string model = "A500", rom, ext;
     std::string disks[4];
     std::vector<std::string> scripts, settings;
     int port = 0;
@@ -174,6 +175,8 @@ int main(int argc, char *argv[])
             model = value();
         } else if (argument == "--rom") {
             rom = value();
+        } else if (argument == "--ext") {
+            ext = value();
         } else if (argument.size() == 5 && argument.compare(0, 4, "--df") == 0 &&
                    argument[4] >= '0' && argument[4] <= '3') {
             disks[argument[4] - '0'] = value();
@@ -238,6 +241,9 @@ int main(int argc, char *argv[])
             host_set_option(*option, OptionParser::parse(*option, setting.substr(equals + 1)));
         }
         emulator.mem.loadRom(rom);
+        if (!ext.empty()) {
+            emulator.mem.loadExt(ext);
+        }
         for (int drive = 0; drive < 4; drive++) {
             if (!disks[drive].empty()) {
                 emulator.df[drive]->insert(disks[drive], false);

@@ -427,6 +427,8 @@ python3 -m unittest test_debug.TapTest       # one class
 ```
 
 - `AMIGA_TEST_KICKSTART` is the Kickstart ROM to use; without it the tests are skipped.
+- `AMIGA_TEST_EXT` is an extension ROM. The free AROS ROM needs one, and with the two files in
+  `extern/silicium/Apps/Shared/Assets/Roms` the tests run without a Kickstart ROM.
 - `AMIGA_TEST_MODEL` is `A1000`, `A500` (the default), `A500-ECS`, `A500+` or `A1200`.
 - `AMIGA_TEST_BINARY` is the executable to test (default `build/vamiga-lua`).
 - `AMIGA_TEST_OPTIONS` adds options of the core to all tests, for example

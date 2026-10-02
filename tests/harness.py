@@ -4,6 +4,7 @@ The tests need a Kickstart ROM, given with the environment variable
 AMIGA_TEST_KICKSTART. The matching Amiga model (see MODELS) is given with
 AMIGA_TEST_MODEL, and defaults to A500. AMIGA_TEST_BINARY overrides the path
 to the vamiga-lua executable, which defaults to build/vamiga-lua.
+AMIGA_TEST_EXT is an extension ROM, which the free AROS ROM needs.
 AMIGA_TEST_OPTIONS adds options of the vAmiga core to all tests, for example
 "MEM.SLOW_RAM=0,CPU.REVISION=68010".
 """
@@ -189,6 +190,8 @@ class Emulator:
                 raise
         config.update(options or {})
         command = [binary, "--model", model, "--rom", kickstart, "--port", str(self.port)]
+        if os.environ.get("AMIGA_TEST_EXT"):
+            command += ["--ext", os.environ["AMIGA_TEST_EXT"]]
         for key, value in config.items():
             if key.startswith("floppy"):
                 command += [f"--df{key[6:]}", value]

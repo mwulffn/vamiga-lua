@@ -1,0 +1,108 @@
+# Builds vamiga-lua on Linux and macOS and runs the tests. The tests use the
+# free AROS ROM which comes with the core, so no Kickstart ROM is needed.
+#
+# When a tag starting with "v" is pushed, the programs are also attached to
+# a release with that name.
+
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+          - os: ubuntu-24.04-arm
+            name: linux-arm64
+          - os: macos-15
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install the tools to build with (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake zlib1g-dev
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j 4
+
+      # test_symbols builds an Amiga program and a disk for it. Without these
+      # tools it is skipped, so a failure to get them does not fail the build.
+      - name: Install vasm, vlink and amitools for the symbol tests
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/amiga-tools/bin"
+          for tool in vasm vlink; do
+            curl -fsSL "http://sun.hasenbraten.de/$tool/release/$tool.tar.gz" | tar xz -C "$HOME/amiga-tools"
+          done
+          make -C "$HOME/amiga-tools/vasm" CPU=m68k SYNTAX=mot -j 4
+          make -C "$HOME/amiga-tools/vlink" -j 4
+          cp "$HOME/amiga-tools/vasm/vasmm68k_mot" "$HOME/amiga-tools/vlink/vlink" "$HOME/amiga-tools/bin/"
+          python3 -m venv "$HOME/amiga-tools/venv"
+          "$HOME/amiga-tools/venv/bin/pip" install amitools
+          ln -s "$HOME/amiga-tools/venv/bin/xdftool" "$HOME/amiga-tools/bin/xdftool"
+          echo "$HOME/amiga-tools/bin" >> "$GITHUB_PATH"
+
+      - name: Test (A500)
+        working-directory: tests
+        env:
+          AMIGA_TEST_MODEL: A500
+          AMIGA_TEST_KICKSTART: ${{ github.workspace }}/extern/silicium/Apps/Shared/Assets/Roms/aros-20260820-rom.bin
+          AMIGA_TEST_EXT: ${{ github.workspace }}/extern/silicium/Apps/Shared/Assets/Roms/aros-20260820-ext.bin
+          NO_COLOR: 1
+        run: ./run_tests.py
+
+      - name: Test (A1200)
+        working-directory: tests
+        env:
+          AMIGA_TEST_MODEL: A1200
+          AMIGA_TEST_KICKSTART: ${{ github.workspace }}/extern/silicium/Apps/Shared/Assets/Roms/aros-20260820-rom.bin
+          AMIGA_TEST_EXT: ${{ github.workspace }}/extern/silicium/Apps/Shared/Assets/Roms/aros-20260820-ext.bin
+          NO_COLOR: 1
+        run: ./run_tests.py
+
+      - name: Pack the program
+        run: |
+          mkdir vamiga-lua-${{ matrix.name }}
+          cp build/vamiga-lua scripts/amiga_lua.py README.md LICENSE vamiga-lua-${{ matrix.name }}/
+          cp -r docs vamiga-lua-${{ matrix.name }}/
+          tar czf vamiga-lua-${{ matrix.name }}.tar.gz vamiga-lua-${{ matrix.name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vamiga-lua-${{ matrix.name }}
+          path: vamiga-lua-${{ matrix.name }}.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" *.tar.gz --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes

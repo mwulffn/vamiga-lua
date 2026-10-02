@@ -56,6 +56,7 @@ scripts/amiga_lua.py --port 5600 'emu.wait_frames(500) return cpu.pc, video.scre
 | --- | --- |
 | `--model <name>` | `A1000`, `A500` (default), `A500-ECS`, `A500+` or `A1200` |
 | `--rom <file>` | Kickstart ROM (required) |
+| `--ext <file>` | Extension ROM (the free AROS ROM needs one) |
 | `--df0 <file>` to `--df3` | Disk images (ADF, DMS and the other formats the core reads) |
 | `--set <option>=<value>` | An option of the vAmiga core, for example `MEM.SLOW_RAM=512` |
 | `--lua <file>` | Run a Lua script at start; can be given several times |
@@ -117,16 +118,23 @@ Silicon Mac.
 
 ## Tests
 
-```sh
-cd tests
-AMIGA_TEST_KICKSTART=/path/to/kick13.rom AMIGA_TEST_MODEL=A500 ./run_tests.py
-```
+[![Build and test](https://github.com/mwulffn/vamiga-lua/actions/workflows/build.yml/badge.svg)](https://github.com/mwulffn/vamiga-lua/actions/workflows/build.yml)
+
 
 140 tests in eleven modules, taken from the FS-UAE engine with few changes. They pass on the
-A1000, A500, A500-ECS, A500+ and A1200 configurations (Kickstart 1.3, 2.04 and 3.1). Most boot a
-small disk image which they create themselves. `test_symbols` builds a program with vasm and
-vlink and puts it on a disk with xdftool (from amitools), and is skipped without them.
-`test_public_disk` downloads the free operating system EmuTOS and boots that.
+A1000, A500, A500-ECS, A500+ and A1200 configurations with Kickstart 1.3, 2.04 and 3.1, and with
+the free AROS ROM.
+
+No Kickstart ROM is needed to run them: the core's repository has the AROS ROM, which is what
+the builds on GitHub use (Linux on x86-64 and ARM, and macOS).
+
+```sh
+ROMS=$PWD/extern/silicium/Apps/Shared/Assets/Roms
+cd tests
+AMIGA_TEST_KICKSTART=$ROMS/aros-20260820-rom.bin AMIGA_TEST_EXT=$ROMS/aros-20260820-ext.bin ./run_tests.py
+```
+
+See [docs/lua.md](docs/lua.md) for the other settings and what the tests need.
 
 ## Licence
 
