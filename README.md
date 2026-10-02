@@ -106,9 +106,13 @@ AMIGA_TEST_KICKSTART=/path/to/kick13.rom AMIGA_TEST_MODEL=A500 ./run_tests.py
 A1000, A500, A500-ECS, A500+ and A1200 configurations (Kickstart 1.3, 2.04 and 3.1). `test_cpu`
 and others boot a small disk image which they create themselves; no other software is needed.
 
-## Licences of the parts
+## Licence
 
-- The vAmiga core is under the Mozilla Public License 2.0 and its CPU core (Moira) under the MIT
-  licence, according to the licence file of Silicium.
-- Lua is under the MIT licence.
-- No licence has been chosen for the code in `src`, `scripts` and `tests` yet.
+The code in `src`, `scripts` and `tests` is under the MIT licence (see `LICENSE`).
+
+The parts it is built with have their own:
+
+- The vAmiga core (`extern/silicium`) is under the Mozilla Public License 2.0 and its CPU core
+  (Moira) under the MIT licence, according to the licence file of Silicium. The Silicium
+  applications, which are not built or used here, are under the GNU General Public License 3.
+- Lua (`extern/lua`) is under the MIT licence.
