@@ -5,6 +5,8 @@
 
 #include "engine.h"
 
+#include "window.h"
+
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -290,7 +292,7 @@ static int l_emu_timing(lua_State *L)
     lua_setfield(L, -2, "cycles_per_line");
     lua_pushinteger(L, (lua_Integer) lines * cycles_per_line);
     lua_setfield(L, -2, "cycles_per_frame");
-    lua_pushnumber(L, core().refreshRate());
+    lua_pushnumber(L, core().nativeRefreshRate());
     lua_setfield(L, -2, "hz");
     return 1;
 }
@@ -366,6 +368,41 @@ static int l_emu_warp(lua_State *L)
     luaL_checktype(L, 1, LUA_TBOOLEAN);
     host_set_warp(lua_toboolean(L, 1));
     return 0;
+}
+
+// emu.window(on, volume) opens or closes the window which shows the picture
+// and plays the sound. The volume, from 0 to 100, is optional. Returns
+// whether the window is open, also when called with no argument.
+static int l_emu_window(lua_State *L)
+{
+    if (!lua_isnone(L, 1)) {
+        luaL_checktype(L, 1, LUA_TBOOLEAN);
+        engine_check_not_in_tap(L);
+        if (!lua_isnoneornil(L, 2)) {
+            lua_Integer volume = luaL_checkinteger(L, 2);
+            luaL_argcheck(L, volume >= 0 && volume <= 100, 2, "the volume is from 0 to 100");
+            window_set_volume((int) volume);
+        }
+        if (lua_toboolean(L, 1)) {
+            bool opened;
+            {
+                // The message is copied to Lua before the error is raised,
+                // which leaves this function with longjmp.
+                std::string error;
+                opened = window_open(error);
+                if (!opened) {
+                    lua_pushfstring(L, "could not open the window: %s", error.c_str());
+                }
+            }
+            if (!opened) {
+                return lua_error(L);
+            }
+        } else {
+            window_close();
+        }
+    }
+    lua_pushboolean(L, window_is_open());
+    return 1;
 }
 
 static int l_emu_reset(lua_State *L)
@@ -445,6 +482,7 @@ static const luaL_Reg emu_functions[] = {
     {"wait_frames", l_emu_wait_frames},
     {"wait_next_frame", l_emu_wait_next_frame},
     {"warp", l_emu_warp},
+    {"window", l_emu_window},
     {NULL, NULL},
 };
 
@@ -491,6 +529,11 @@ bool engine_run(void)
         }
     }
     return false;
+}
+
+int64_t engine_frame_number(void)
+{
+    return g_frame;
 }
 
 void engine_frame(void)
@@ -540,6 +583,7 @@ void engine_stopped_loop(void)
     }
     notify_stopped();
     while (g_stop_requested && !host_quit_requested()) {
+        window_idle();
         if (!engine_remote_poll()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

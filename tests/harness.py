@@ -147,6 +147,21 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def base_command() -> list[str]:
+    """The command line which starts the emulator the tests are to be run with."""
+    kickstart = os.environ.get("AMIGA_TEST_KICKSTART")
+    if not kickstart:
+        raise unittest.SkipTest("AMIGA_TEST_KICKSTART is not set")
+    binary = os.environ.get("AMIGA_TEST_BINARY", str(ROOT_DIR / "build" / "vamiga-lua"))
+    model = os.environ.get("AMIGA_TEST_MODEL", "A500")
+    if model not in MODELS:
+        raise unittest.SkipTest(f"The model {model} is not supported")
+    command = [binary, "--model", model, "--rom", kickstart]
+    if os.environ.get("AMIGA_TEST_EXT"):
+        command += ["--ext", os.environ["AMIGA_TEST_EXT"]]
+    return command
+
+
 class Emulator:
     """A running vamiga-lua with a connected LuaClient in self.lua."""
 
@@ -156,24 +171,19 @@ class Emulator:
         test_disk: bool = False,
         dos_disk: bool = False,
         arguments: list[str] | None = None,
+        environment: dict[str, str] | None = None,
     ) -> None:
         """Start the emulator.
 
         The options are options of the vAmiga core ("MEM.SLOW_RAM": "0"),
         or "floppy0" to "floppy3" with the path of a disk image. The
-        arguments are added to the command line as they are.
+        arguments are added to the command line as they are, and the
+        environment to the environment variables of the emulator.
         """
-        kickstart = os.environ.get("AMIGA_TEST_KICKSTART")
-        if not kickstart:
-            raise unittest.SkipTest("AMIGA_TEST_KICKSTART is not set")
-        binary = os.environ.get("AMIGA_TEST_BINARY", str(ROOT_DIR / "build" / "vamiga-lua"))
-        model = os.environ.get("AMIGA_TEST_MODEL", "A500")
-        if model not in MODELS:
-            raise unittest.SkipTest(f"The model {model} is not supported")
-
+        self.port = free_port()
+        command = base_command() + ["--port", str(self.port)]
         self.directory = tempfile.TemporaryDirectory(prefix="vamiga-lua-test-")
         self.path = Path(self.directory.name)
-        self.port = free_port()
         config: dict[str, str] = {}
         for option in os.environ.get("AMIGA_TEST_OPTIONS", "").split(","):
             if option:
@@ -189,9 +199,6 @@ class Emulator:
                 self.directory.cleanup()
                 raise
         config.update(options or {})
-        command = [binary, "--model", model, "--rom", kickstart, "--port", str(self.port)]
-        if os.environ.get("AMIGA_TEST_EXT"):
-            command += ["--ext", os.environ["AMIGA_TEST_EXT"]]
         for key, value in config.items():
             if key.startswith("floppy"):
                 command += [f"--df{key[6:]}", value]
@@ -201,7 +208,12 @@ class Emulator:
 
         self.lua: LuaClient | None = None
         self.log = open(self.path / "log.txt", "w")
-        self.process = subprocess.Popen(command, stdout=self.log, stderr=subprocess.STDOUT)
+        self.process = subprocess.Popen(
+            command,
+            stdout=self.log,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, **(environment or {})},
+        )
         try:
             self.lua = self.connect()
         except Exception:

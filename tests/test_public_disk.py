@@ -26,7 +26,9 @@ EMUTOS_ADF = "emutos-amiga-floppy-1.3/emutos.adf"
 COMPARED_LINES = 560
 
 # The EmuTOS desktop has a dithered background, so a line across the screen
-# changes between black and white many times.
+# changes between black and white about 580 times. The screen with the
+# version, which is shown for a moment while EmuTOS starts, has text on the
+# line, which gives about 220 changes.
 DESKTOP_VISIBLE = """
 local changes, last = 0, nil
 for x = 100, 700 do
@@ -36,7 +38,7 @@ for x = 100, 700 do
         last = red
     end
 end
-return changes > 200
+return changes > 400
 """
 
 

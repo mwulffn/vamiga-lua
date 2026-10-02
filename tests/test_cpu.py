@@ -50,13 +50,14 @@ class CpuTest(EmulatorTestCase):
         self.assertEqual(self.lua.eval(f"cpu.{active}"), self.lua.eval("cpu.a7"))
 
     def test_write_pc(self) -> None:
-        # Jump to the instruction which adds 1 to the counter, and then run
-        # to the end of the frame. The counter is then 2 higher instead of 1.
+        # Jump to the instruction which adds 1 to the counter, and run it and
+        # the one which stores the counter.
         address = self.program + harness.COUNTER_OFFSET
         self.lua.call("emu.step()")
-        before = self.lua.eval(f"mem.peek_u32({address})")
-        self.lua.call(f"cpu.pc = {self.program + harness.ADDQ_OFFSET} emu.step()")
-        self.assertEqual(self.lua.eval(f"mem.peek_u32({address})"), before + 2)
+        before = self.lua.eval("cpu.d0")
+        self.lua.call(f"cpu.pc = {self.program + harness.ADDQ_OFFSET} dbg.step(2)")
+        self.assertEqual(self.lua.eval("cpu.pc"), self.program + harness.ADDQ_OFFSET + 4)
+        self.assertEqual(self.lua.eval(f"mem.peek_u32({address})"), before + 1)
 
     def test_disasm(self) -> None:
         lines = self.lua.eval(f"cpu.disasm({self.program + harness.ADDQ_OFFSET}, 2)")

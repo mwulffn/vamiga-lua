@@ -18,6 +18,7 @@ build/vamiga-lua --rom kick13.rom --df0 game.adf --lua script.lua --port 5600
 - `--lua <file>` loads a script when the emulation starts. It can be given several times.
 - `--port <number>` makes the emulator listen on this TCP port, on 127.0.0.1 only, for Lua code
   to run.
+- `--window` shows the picture in a window and plays the sound (see [The window](#the-window)).
 
 All scripts and all code received on the socket share one Lua state, so a global variable set by
 one request can be used by the next. The standard Lua 5.4 libraries are available, including `io`
@@ -86,6 +87,11 @@ calls and cannot wait.
 Because of this, a script gives the same result every time it is run: the same frames, the same
 register values, the same cycle counts.
 
+A frame ends where the core finishes its picture: when the beam has passed horizontal position 18
+of line 0 and the CPU has finished the instruction it was running. That is a little after the
+vertical blank interrupt has been requested, so the interrupt handler of the program has usually
+started, but not finished, when a task is continued.
+
 The emulation is either running or stopped. It stops when `emu.pause` is called, when a breakpoint
 without a callback is reached, and when a frame or instruction step has finished. While it is
 stopped, requests from the socket are still handled, so everything can be inspected and changed.
@@ -113,6 +119,7 @@ Addresses and values are integers. Functions raise a Lua error when given invali
 | `emu.paused()` | True if the emulation is stopped. |
 | `emu.step(n)` | Run `n` frames (default 1) and stop again. Returns when that is done. |
 | `emu.warp(on)` | Turn warp mode (running as fast as possible) on or off. |
+| `emu.window(on, volume)` | Open or close the window. Returns whether it is open, also with no arguments. |
 | `emu.reset(hard)` | Reset the Amiga. A hard reset also clears memory. |
 | `emu.quit()` | End the program. |
 | `emu.config_get(name)` | The value of an option of the vAmiga core, as a number. |
@@ -131,6 +138,24 @@ The options are those of the vAmiga core, with the names it uses in its own shel
 `AGNUS.REVISION`, `DENISE.REVISION` and `BLITTER.ACCURACY`. `emu.config_set` takes a number, or a
 name the core knows for the value. An unknown option name is an error. The same options can be
 given on the command line with `--set <name>=<value>`.
+
+#### The window
+
+The emulator normally has no window: a script reads the picture with the `video` functions. For a
+person who wants to watch what a script is doing, `--window` on the command line or
+`emu.window(true)` opens a window which shows the picture and plays the sound.
+
+- The window is only for watching. It takes no input: keys pressed and mouse movements in it are
+  not sent to the Amiga. Closing it does not end the program (quitting the application, with
+  Cmd+Q on macOS, does).
+- A script sees exactly the same with and without the window: the same frames, registers and
+  cycle counts.
+- The sound is played while the emulation runs at the speed of the Amiga. It is silent in warp
+  mode, while the emulation is stopped, and for a moment after a breakpoint has been reached.
+  The volume is a number from 0 to 100 (`emu.window(true, 30)`, or `--volume 30`).
+- In warp mode the window shows some of the frames, at most 50 per second.
+- The window needs SDL 3 when the program is built. Without it, `emu.window(true)` raises an
+  error and `--window` ends the program.
 
 ### mem
 
@@ -447,7 +472,8 @@ the Amiga. Other ways to save time:
 
 ## Differences from the FS-UAE engine
 
-- There is no window. The emulator is only controlled through Lua.
+- The window is optional, shows the picture and plays the sound, and takes no input. The
+  emulator is only controlled through Lua.
 - `dbg.command` (commands of the UAE debugger) does not exist.
 - `emu.config_get` and `emu.config_set` use the option names of the vAmiga core and numbers as
   values.
@@ -485,4 +511,5 @@ python3 -m unittest test_debug.TapTest       # one class
 Most tests boot a small disk image which they create themselves. `test_symbols.py` builds a
 program with vasm and vlink and puts it on a disk with xdftool (from amitools); it is skipped if
 those tools are not installed. `test_public_disk.py` downloads the free operating system EmuTOS
-and boots that.
+and boots that. `test_window.py` opens the window with the drivers of SDL which need no screen
+and no sound device, and is skipped if the program was built without SDL 3.

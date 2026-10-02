@@ -29,7 +29,7 @@ vamiga::Amiga &core(void);
 
 // Something which made the emulator pause.
 enum host_event_type {
-    // The end of the frame was reached.
+    // The frame has ended (see "Where a frame ends" in main.cpp).
     HOST_FRAME_END,
     // The next instruction is at a breakpoint address.
     HOST_BREAKPOINT,
@@ -48,6 +48,10 @@ enum host_event_type {
     HOST_COPPER_WATCHPOINT,
     HOST_BEAM,
 };
+
+// The beam trap of the core which the frame loop uses (line 0, in the form
+// the core has its beam traps in).
+#define HOST_FRAME_END_TRAP 0x12
 
 struct host_event {
     host_event_type type;

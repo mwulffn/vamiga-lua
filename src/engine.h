@@ -38,6 +38,8 @@ void engine_load(const char *filename);
 // something else stops it before that. The Lua callbacks of breakpoints and
 // exception watches are run from here. Returns true if the frame ended.
 bool engine_run(void);
+// The number of frames emulated (what emu.frame returns).
+int64_t engine_frame_number(void);
 // Called when a frame has been emulated: runs frame callbacks, resumes the
 // tasks which are due, and handles remote requests.
 void engine_frame(void);
@@ -113,10 +115,20 @@ void engine_debug_events(const std::vector<host_event> &events);
 // True while instructions are run one at a time for dbg.step.
 bool engine_debug_stepping(void);
 void engine_debug_free(void);
+// True if there is a Lua beam breakpoint at the position (the line in the
+// high and the horizontal position in the low 16 bits).
+bool engine_debug_has_beam_break(uint32_t target);
 // Raises a Lua error if called from a tap callback. Tap callbacks run on the
 // emulator thread, where the functions of the core which wait for that
 // thread cannot be used.
 void engine_check_not_in_tap(lua_State *L);
+
+// lua_video.cpp
+
+// The size of the frame of the video functions, and the frame as red, green
+// and blue bytes, line by line from the top.
+void engine_video_size(int &width, int &height);
+std::vector<uint8_t> engine_video_frame(void);
 
 // json.cpp
 

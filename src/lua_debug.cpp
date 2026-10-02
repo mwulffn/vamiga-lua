@@ -162,13 +162,25 @@ static void update_core_chip_guards(chip_guard_kind kind)
     }
     for (isize i = guards.elements() - 1; i >= 0; i--) {
         u32 target = guards.guardNr(i)->addr;
-        if (wanted.erase(target) == 0) {
+        // The beam trap where a frame ends belongs to the frame loop.
+        bool frame_end = kind == BEAM_BREAKPOINT && target == HOST_FRAME_END_TRAP;
+        if (wanted.erase(target) == 0 && !frame_end) {
             guards.removeAt(target);
         }
     }
     for (u32 target : wanted) {
         guards.setAt(target);
     }
+}
+
+bool engine_debug_has_beam_break(uint32_t target)
+{
+    for (const lua_chip_guard &guard : g_chip_guards) {
+        if (guard.kind == BEAM_BREAKPOINT && guard.target == target) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static u32 peek_u16(u32 address)

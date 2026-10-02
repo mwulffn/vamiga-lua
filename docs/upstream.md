@@ -3,8 +3,8 @@
 The core is used from a fork (`mwulffn/silicium`, branch `vamiga-lua`) of
 [Silicium](https://github.com/dirkwhoffmann/silicium), pinned as the submodule `extern/silicium`.
 The fork should stay as close to the original as possible. This file lists what the fork changes,
-and things found in the core which could be reported or contributed. Nothing here has been sent
-to the author yet.
+and things found in the core which could be reported or contributed. The checksum of the ROM
+has been raised with the author (dirkwhoffmann/silicium#2); nothing else has been sent.
 
 ## Changes in the fork
 
@@ -25,7 +25,44 @@ be measured.
 Worth offering upstream as it is. To update the core, merge the `main` branch of Silicium into
 the `vamiga-lua` branch of the fork, push it, and move the submodule to the merge.
 
+### Beam traps are kept over a reset
+
+Commit `ba4cff9`, two lines at the end of `Agnus::operator<<(SerResetter &)` in
+`Cores/VACore/Components/Agnus/Agnus.cpp`.
+
+A reset clears all event slots of Agnus, and with them the event which triggers the next beam
+trap. Nothing schedules it again, so after a reset (also the RESET instruction, which Kickstart
+runs when it starts) the beam traps which are set are never reached, until one of them is
+changed. The function already keeps the event of the inspector over a reset for the same reason;
+the change calls `beamtraps.scheduleNextEvent()` after that.
+
+Here the beam trap at the end of the frame is what stops the emulator after every frame, so
+without the change the emulator runs on for ever after the first reset. The Lua beam breakpoints
+(`dbg.beam_break`) need it too (`test_break_after_reset` in `tests/test_chips.py`).
+
+This looks like an oversight in the core, and is small enough to report with the fix.
+
 ## Found in the core, not changed
+
+### Running exactly one frame without pausing
+
+The core mutes the sound and fades out what is buffered every time the emulator is paused
+(`AudioPort::_pause`), so a program which steps the emulation frame by frame by pausing it gets
+no sound. The other way to hold the emulator thread, `suspend()` and `resume()`, cannot be used
+to let it run one frame and no more: they take and release both locks of the thread together,
+the wake-up of the thread is a flag which stays set, and the thread wakes up by itself every
+50 ms. With a breakpoint in every frame, one frame in some hundred was run twice.
+
+`run_frame_with_sound` in `src/main.cpp` therefore reaches the two locks (`Thread::lock` and
+`Thread::suspensionLock`, which are protected) through a derived class, and releases them one at
+a time. That depends on how `Thread::execute` and `Thread::sleep` use them, so it has to be
+looked at again when the core is updated. A function in the core which runs one frame while the
+caller stays suspended would replace it, if the author would want one.
+
+A beam trap which is reached is scheduled again at once, and when the emulator has stopped with
+the beam exactly at the position of the trap, it is reached again by the next instruction
+(`Beamtraps::scheduleNextEvent` takes a distance of 0 as the next time). Harmless here: it costs
+a second pause in such a frame.
 
 ### Resuming the emulator computes the checksum of the ROM
 

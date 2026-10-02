@@ -40,6 +40,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential cmake zlib1g-dev
 
+      # The window needs SDL 3, which Ubuntu 24.04 does not have. There the
+      # program is built without the window and its tests are skipped.
+      - name: Install SDL 3 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl3
+
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release

@@ -1,12 +1,13 @@
 # vamiga-lua
 
 The [vAmiga](https://github.com/dirkwhoffmann/vAmiga) Amiga emulator core with a Lua scripting
-engine and a control port, and nothing else. There is no window and no user interface. A program
-(or an agent) starts it, sends Lua code over a local socket, and reads memory, registers and the
-picture back.
+engine and a control port, and nothing else. There is no user interface. A program (or an agent)
+starts it, sends Lua code over a local socket, and reads memory, registers and the picture back.
 
 It is a host around the core in the Unix sense: the core emulates, this program gives it a way to
-be driven, and anything which needs a window or a GUI is a different program.
+be driven, and anything which needs a GUI is a different program. For a person who wants to watch
+what the program or agent is doing, it can show the picture in a window and play the sound
+(`--window`). The window takes no input.
 
 The Lua API and the socket protocol are the ones of the Lua engine in the
 [FS-UAE fork](https://github.com/mwulffn/fs-uae) this grew out of, so scripts and tests can be
@@ -18,7 +19,7 @@ What is here:
 
 | Table | Functions |
 | --- | --- |
-| `emu` | `frame`, `cycles`, `beam`, `timing`, `wait_frames`, `wait_next_frame`, `on_frame`, `remove_frame_callback`, `pause`, `resume`, `paused`, `step`, `warp`, `reset`, `quit`, `config_get`, `config_set`, `log` |
+| `emu` | `frame`, `cycles`, `beam`, `timing`, `wait_frames`, `wait_next_frame`, `on_frame`, `remove_frame_callback`, `pause`, `resume`, `paused`, `step`, `warp`, `window`, `reset`, `quit`, `config_get`, `config_set`, `log` |
 | `cpu` | The registers as fields (`cpu.d0`, `cpu.a7`, `cpu.pc`, `cpu.sr`, ...), `disasm` |
 | `mem` | `read_u8/u16/u32`, `write_u8/u16/u32`, `peek_u8/u16/u32`, `poke_u8/u16/u32`, `read_range`, `write_range`, `custom`, `tap_read`, `tap_write`, `tap_remove` |
 | `video` | `size`, `pixel`, `pixels`, `screenshot` |
@@ -31,7 +32,9 @@ Not here: `dbg.command`, which runs a command of the UAE debugger in FS-UAE.
 
 ## Building
 
-Needs CMake, a C++20 compiler and zlib. The core is a git submodule.
+Needs CMake, a C++20 compiler and zlib. The core is a git submodule. The window needs
+[SDL 3](https://libsdl.org) (`brew install sdl3`, or `libsdl3-dev` where the distribution has
+it); if CMake does not find it, the program is built without the window.
 
 ```sh
 git submodule update --init
@@ -42,7 +45,7 @@ cmake --build build -j
 The core comes from a fork of the [Silicium](https://github.com/dirkwhoffmann/silicium)
 repository, which is where its author develops it now. The fork
 ([mwulffn/silicium](https://github.com/mwulffn/silicium), branch `vamiga-lua`) adds one small
-hook for the memory taps; see `docs/upstream.md`. Only `Cores/` is built; Qt is not needed.
+hook for the memory taps and keeps the beam breakpoints over a reset; see `docs/upstream.md`. Only `Cores/` is built; Qt is not needed.
 Lua 5.4 is in `extern/lua`.
 
 ## Running
@@ -62,6 +65,8 @@ scripts/amiga_lua.py --port 5600 'emu.wait_frames(500) return cpu.pc, video.scre
 | `--lua <file>` | Run a Lua script at start; can be given several times |
 | `--port <number>` | Listen on 127.0.0.1 for Lua code |
 | `--warp` | Run as fast as possible from the start |
+| `--window` | Show the picture in a window and play the sound |
+| `--volume <percent>` | How loud the sound is played, 0 to 100 (default 100) |
 
 Lua code is not sandboxed. Anything which can connect to the port can run code with the access
 of the process.
@@ -75,6 +80,12 @@ The core runs the emulation on its own thread. This program keeps the emulator p
 it run to the end of the current frame when a frame is wanted. All Lua code runs on the main
 thread while the emulator is paused, so it always sees the machine between two instructions and
 between two frames. Two runs of the same script give the same result, frame for frame.
+
+The window is drawn from the same frame the `video` functions read, with SDL 3, and the sound is
+taken from the core by SDL's sound thread. The core fades the sound out whenever the emulator is
+paused, so while sound is played the emulator is not paused between frames: the main thread
+holds the locks of the emulator thread instead, and lets it run one frame at a time. Frames end
+at the same instruction either way, so a script sees the same with and without the window.
 
 States are taken and loaded at once, at that same point. In 1,600 snapshot and restore cycles
 with a program reading a file in a loop (A500 and A1200 configurations) none failed.
@@ -128,12 +139,14 @@ Silicon Mac.
 [![Build and test](https://github.com/mwulffn/vamiga-lua/actions/workflows/build.yml/badge.svg)](https://github.com/mwulffn/vamiga-lua/actions/workflows/build.yml)
 
 
-158 tests in twelve modules, most of them taken from the FS-UAE engine with few changes. They pass on the
-A1000, A500, A500-ECS, A500+ and A1200 configurations with Kickstart 1.3, 2.04 and 3.1, and with
-the free AROS ROM.
+170 tests in thirteen modules, most of them taken from the FS-UAE engine with few changes. They
+pass on the A1000, A500, A500-ECS, A500+ and A1200 configurations with Kickstart 1.3, 2.04 and
+3.1, and with the free AROS ROM.
 
 No Kickstart ROM is needed to run them: the core's repository has the AROS ROM, which is what
-the builds on GitHub use (Linux on x86-64 and ARM, and macOS).
+the builds on GitHub use (Linux on x86-64 and ARM, and macOS). The macOS build there has the
+window, and needs SDL 3 to be installed to run (`brew install sdl3`); the Linux builds have no
+window, as Ubuntu 24.04 has no SDL 3.
 
 ```sh
 ROMS=$PWD/extern/silicium/Apps/Shared/Assets/Roms

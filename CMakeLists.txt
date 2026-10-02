@@ -22,6 +22,15 @@ target_compile_definitions(lua PRIVATE LUA_USE_POSIX)
 
 find_package(ZLIB REQUIRED)
 
+# SDL 3 is only needed for the window (--window), and is left out if it is
+# not installed.
+find_package(SDL3 CONFIG QUIET)
+if(SDL3_FOUND)
+  message(STATUS "SDL 3 found: building with the window")
+else()
+  message(STATUS "SDL 3 not found: building without the window")
+endif()
+
 add_executable(vamiga-lua
   src/engine.cpp
   src/json.cpp
@@ -34,5 +43,10 @@ add_executable(vamiga-lua
   src/lua_video.cpp
   src/main.cpp
   src/remote.cpp
-  src/sockets.cpp)
+  src/sockets.cpp
+  src/window.cpp)
 target_link_libraries(vamiga-lua VACore lua ZLIB::ZLIB)
+if(SDL3_FOUND)
+  target_compile_definitions(vamiga-lua PRIVATE VAMIGA_LUA_WINDOW)
+  target_link_libraries(vamiga-lua SDL3::SDL3)
+endif()

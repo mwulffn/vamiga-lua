@@ -126,6 +126,14 @@ class CopperTest(ChipTestCase):
 
 
 class BeamTest(ChipTestCase):
+    def test_break_after_reset(self) -> None:
+        # A reset clears the events of the core, the one for the beam
+        # breakpoints too.
+        self.lua.call("dbg.beam_break(150, 40) emu.pause() emu.reset(false) emu.resume()")
+        info = self.lua.eval("dbg.wait(10)")
+        self.assertEqual(info["reason"], "beam")
+        self.assertEqual(self.lua.call("return emu.beam()")[0], 150)
+
     def test_break_stops_the_emulation(self) -> None:
         breakpoint_id = self.lua.eval("dbg.beam_break(150, 40)")
         info = self.lua.eval("dbg.wait(10)")

@@ -97,8 +97,13 @@ static int l_video_pixel(lua_State *L)
     return 3;
 }
 
-// Returns the frame as red, green and blue bytes, line by line.
-static std::vector<u8> frame_rgb(void)
+void engine_video_size(int &width, int &height)
+{
+    width = FRAME_WIDTH;
+    height = FRAME_HEIGHT;
+}
+
+std::vector<uint8_t> engine_video_frame(void)
 {
     video_frame frame;
     std::vector<u8> pixels((size_t) FRAME_WIDTH * FRAME_HEIGHT * 3);
@@ -116,7 +121,7 @@ static std::vector<u8> frame_rgb(void)
 // height.
 static int l_video_pixels(lua_State *L)
 {
-    std::vector<u8> pixels = frame_rgb();
+    std::vector<u8> pixels = engine_video_frame();
     lua_pushlstring(L, (const char *) pixels.data(), pixels.size());
     lua_pushinteger(L, FRAME_WIDTH);
     lua_pushinteger(L, FRAME_HEIGHT);
@@ -142,7 +147,7 @@ static void append_chunk(std::vector<u8> &out, const char *type, const std::vect
 // Returns the frame as a PNG file, or nothing if it could not be compressed.
 static std::vector<u8> frame_png(void)
 {
-    std::vector<u8> pixels = frame_rgb();
+    std::vector<u8> pixels = engine_video_frame();
     size_t line_size = (size_t) FRAME_WIDTH * 3;
     // Every line starts with a byte giving its filter (0: none).
     std::vector<u8> raw;
