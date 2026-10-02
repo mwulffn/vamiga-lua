@@ -36,8 +36,25 @@ once in the command it queues). With a breakpoint in a loop, or when stepping fr
 this was most of the time spent: a breakpoint took 0.9 ms to pass.
 
 Here it is avoided by calling `Emulator::switchState(ExecState::RUNNING)` directly (see
-`host_run` in `src/main.cpp`). In the core, keeping the traits of the ROM from when it was loaded
-would remove it for everyone, including the core's own debugger and its GDB server.
+`host_run` in `src/main.cpp`).
+
+This is not a mistake in the core, and there are reasons for doing it this way:
+
+- The check is a real one: the emulator must not run without a ROM, and the AROS ROM needs its
+  extension ROM and 1 MB of RAM. Which ROM it is can only be told from its contents.
+- Computing the checksum when it is asked for is always right. The contents of the ROM can
+  change in many places: loading, erasing or deleting a ROM, loading a snapshot or a workspace
+  with the ROMs in it (`MEM.SAVE_ROMS`), the patch the core applies to Kickstart 1.2 for its
+  debugger board, and `Memory::patch` (which the Lua `poke` functions use). A checksum which is
+  kept would have to be thrown away in every one of them.
+- For a person at the keyboard, 0.45 ms per press of "run" cannot be noticed. It only shows when
+  a program resumes the emulator thousands of times per second, as this one does.
+
+So what to tell the author is how the core is used here and what it costs then, and to ask
+whether he would take a change which keeps the checksum (cleared wherever the ROM changes) or
+which makes the check cheaper, for example by only looking for a ROM when running and leaving
+the AROS checks to when a ROM is loaded. If he would rather keep it as it is, nothing is lost:
+the way around it above works.
 
 ### An exception gets through with an odd supervisor stack pointer (68000)
 
