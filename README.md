@@ -14,7 +14,7 @@ run against either emulator.
 
 ## Status
 
-Stages 1 and 2 of 3 are done. What is here:
+What is here:
 
 | Table | Functions |
 | --- | --- |
@@ -25,7 +25,7 @@ Stages 1 and 2 of 3 are done. What is here:
 | `state` | `save`, `load`, `snapshot`, `restore` |
 | `media` | `insert`, `eject`, `path` |
 | `input` | `key`, `joy`, `mouse`, `mouse_button`, `port_mode`, `type` |
-| `dbg` | `bpset`, `bpclear`, `bplist`, `exset`, `exclear`, `step`, `go`, `wait`, `stopped`, `measure`, `load_symbols`, `unload_symbols`, `symbol`, `lookup` |
+| `dbg` | `bpset`, `bpclear`, `bplist`, `exset`, `exclear`, `step`, `go`, `wait`, `stopped`, `measure`, `load_symbols`, `unload_symbols`, `symbol`, `lookup`, `copper_break`, `copper_watch`, `copper_clear`, `copper`, `copper_disasm`, `beam_break`, `beam_clear` |
 
 Not here: `dbg.command`, which runs a command of the UAE debugger in FS-UAE.
 
@@ -92,6 +92,13 @@ and cannot use the functions which need the emulator to be paused (`state`, `med
 In warp mode, with every frame drawn, a demo runs at about 720 frames per second on an Apple
 Silicon Mac.
 
+## More than the FS-UAE engine has
+
+- Breakpoints for the copper (at an instruction of a copper list, or when it writes a register)
+  and for a position of the beam, and functions to look at the copper lists.
+- States can be taken and loaded at any time, and are always sound.
+- Runs are repeatable frame for frame.
+
 ## Differences from the FS-UAE engine
 
 - No `dbg.command`.
@@ -121,7 +128,7 @@ Silicon Mac.
 [![Build and test](https://github.com/mwulffn/vamiga-lua/actions/workflows/build.yml/badge.svg)](https://github.com/mwulffn/vamiga-lua/actions/workflows/build.yml)
 
 
-140 tests in eleven modules, taken from the FS-UAE engine with few changes. They pass on the
+158 tests in twelve modules, most of them taken from the FS-UAE engine with few changes. They pass on the
 A1000, A500, A500-ECS, A500+ and A1200 configurations with Kickstart 1.3, 2.04 and 3.1, and with
 the free AROS ROM.
 

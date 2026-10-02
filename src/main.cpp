@@ -89,6 +89,15 @@ static void process_message(const void *listener, Message message)
         case Msg::CPU_HALT:
             g_events.push_back({HOST_HALT, 0, -1});
             break;
+        case Msg::COPPERBP_REACHED:
+            g_events.push_back({HOST_COPPER_BREAKPOINT, 0, -1});
+            break;
+        case Msg::COPPERWP_REACHED:
+            g_events.push_back({HOST_COPPER_WATCHPOINT, 0, -1});
+            break;
+        case Msg::BEAMTRAP_REACHED:
+            g_events.push_back({HOST_BEAM, 0, -1});
+            break;
         case Msg::PAUSE:
             g_pause_count++;
             g_pause_condition.notify_one();

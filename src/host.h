@@ -40,6 +40,13 @@ enum host_event_type {
     HOST_STEP,
     // The CPU has halted (after a double fault).
     HOST_HALT,
+    // The copper has reached an instruction which has a breakpoint in the
+    // core, has written a register which has a watchpoint, or the beam has
+    // reached a position which has a trap. The CPU has finished the
+    // instruction it was running when that happened.
+    HOST_COPPER_BREAKPOINT,
+    HOST_COPPER_WATCHPOINT,
+    HOST_BEAM,
 };
 
 struct host_event {

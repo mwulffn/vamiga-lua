@@ -1,5 +1,5 @@
-// Lua breakpoints, instruction stepping, exception watches (the dbg table)
-// and memory taps (mem.tap_*).
+// Lua breakpoints for the CPU, the copper and the beam, instruction
+// stepping, exception watches (the dbg table) and memory taps (mem.tap_*).
 //
 // The breakpoints and catchpoints of the vAmiga core are used to make the
 // emulator pause, and the Lua side is handled here on the main thread while
@@ -9,6 +9,8 @@
 // has no callback or the callback calls emu.pause.
 
 #include "engine.h"
+
+#include "Agnus.h"
 
 #include <cstring>
 #include <set>
@@ -41,7 +43,32 @@ struct lua_exception_watch {
 // the same from both emulators.
 #define HALT_DOUBLE_FAULT 2
 
+// Breakpoints for the copper and the beam. They use the guards of the core
+// in the same way as the CPU breakpoints do, but the emulator pauses when
+// the CPU has finished the instruction it was running, a few colour clocks
+// after the copper or the beam got there.
+enum chip_guard_kind {
+    // The copper is about to run the instruction at this address.
+    COPPER_BREAKPOINT,
+    // The copper has written this register (an address, as in mem.custom).
+    COPPER_WATCHPOINT,
+    // The beam has reached this line and horizontal position.
+    BEAM_BREAKPOINT,
+};
+
+struct lua_chip_guard {
+    int id;
+    chip_guard_kind kind;
+    // The address, or the line in the high and the position in the low 16
+    // bits.
+    u32 target;
+    int callback;
+    // The frame the guard was last reported in (beam breakpoints only).
+    i64 last_frame;
+};
+
 static std::vector<lua_breakpoint> g_breakpoints;
+static std::vector<lua_chip_guard> g_chip_guards;
 static std::vector<lua_exception_watch> g_exception_watches;
 static int g_next_id = 1;
 // When not 0, the number of instructions left to run before stopping.
@@ -102,6 +129,45 @@ static void update_core_catchpoints(void)
     }
     for (u32 vector : wanted) {
         guards.setAt(vector);
+    }
+}
+
+// The list of guards in the core for a kind of chip guard.
+static GuardList &core_guards(chip_guard_kind kind)
+{
+    Agnus &agnus = core().agnus;
+    switch (kind) {
+        case COPPER_BREAKPOINT: return agnus.copper.debugger.breakpoints;
+        case COPPER_WATCHPOINT: return agnus.copper.debugger.watchpoints;
+        default: return agnus.dmaDebugger.beamtraps;
+    }
+}
+
+// What the guards of the core for the copper watchpoints hold: the offset
+// of the register from $DFF000.
+static u32 core_target(const lua_chip_guard &guard)
+{
+    return guard.kind == COPPER_WATCHPOINT ? (guard.target & 0x1fe) : guard.target;
+}
+
+// Makes the core have a guard for every target with a Lua guard of the kind.
+static void update_core_chip_guards(chip_guard_kind kind)
+{
+    GuardList &guards = core_guards(kind);
+    std::set<u32> wanted;
+    for (const lua_chip_guard &guard : g_chip_guards) {
+        if (guard.kind == kind) {
+            wanted.insert(core_target(guard));
+        }
+    }
+    for (isize i = guards.elements() - 1; i >= 0; i--) {
+        u32 target = guards.guardNr(i)->addr;
+        if (wanted.erase(target) == 0) {
+            guards.removeAt(target);
+        }
+    }
+    for (u32 target : wanted) {
+        guards.setAt(target);
     }
 }
 
@@ -222,6 +288,68 @@ static void run_exception_watches(const char *reason, int vector, int number, u3
     }
 }
 
+// How far (in colour clocks) the beam can have moved past a beam breakpoint
+// when the emulator pauses for it: the CPU finishes its instruction first,
+// and can be held up by an interrupt being taken. One line is far more than
+// that.
+#define BEAM_WINDOW 227
+
+// Runs the copper and beam guards of a kind which the core has just paused
+// the emulator for.
+static void run_chip_guards(chip_guard_kind kind)
+{
+    static const char *const reasons[] = {"copper_breakpoint", "copper_watchpoint", "beam"};
+    lua_State *L = g_engine_state;
+    Agnus &agnus = core().agnus;
+    // The guard of the core which matched (the copper ones remember it).
+    u32 hit = 0;
+    if (kind != BEAM_BREAKPOINT) {
+        auto info = core_guards(kind).hit();
+        if (!info) {
+            return;
+        }
+        hit = info->addr;
+    }
+    // Callbacks can add and remove guards.
+    std::vector<lua_chip_guard> guards = g_chip_guards;
+    for (const lua_chip_guard &guard : guards) {
+        if (guard.kind != kind) {
+            continue;
+        }
+        if (kind == BEAM_BREAKPOINT) {
+            // The core does not say which trap it was. It is one the beam
+            // has just passed, and which has not been reported this frame.
+            isize passed = (agnus.pos.v - (isize) (guard.target >> 16)) * BEAM_WINDOW +
+                           agnus.pos.h - (isize) (guard.target & 0xffff);
+            if (passed < 0 || passed > BEAM_WINDOW || guard.last_frame == agnus.pos.frame) {
+                continue;
+            }
+            for (lua_chip_guard &original : g_chip_guards) {
+                if (original.id == guard.id) {
+                    original.last_frame = agnus.pos.frame;
+                }
+            }
+        } else if (core_target(guard) != hit) {
+            continue;
+        }
+        bool stop = guard.callback == LUA_NOREF;
+        if (!stop) {
+            lua_rawgeti(L, LUA_REGISTRYINDEX, guard.callback);
+            if (kind == BEAM_BREAKPOINT) {
+                lua_pushinteger(L, guard.target >> 16);
+                lua_pushinteger(L, guard.target & 0xffff);
+                stop = run_callback(2, "Error in beam breakpoint callback");
+            } else {
+                lua_pushinteger(L, guard.target);
+                stop = run_callback(1, "Error in copper breakpoint callback");
+            }
+        }
+        if (stop) {
+            engine_stop(reasons[kind], guard.id, guard.target);
+        }
+    }
+}
+
 void engine_debug_events(const std::vector<host_event> &events)
 {
     for (const host_event &event : events) {
@@ -245,6 +373,15 @@ void engine_debug_events(const std::vector<host_event> &events)
             case HOST_HALT:
                 run_exception_watches(
                     "halt", VECTOR_HALT, HALT_DOUBLE_FAULT, core().cpu.getPC0());
+                break;
+            case HOST_COPPER_BREAKPOINT:
+                run_chip_guards(COPPER_BREAKPOINT);
+                break;
+            case HOST_COPPER_WATCHPOINT:
+                run_chip_guards(COPPER_WATCHPOINT);
+                break;
+            case HOST_BEAM:
+                run_chip_guards(BEAM_BREAKPOINT);
                 break;
             case HOST_FRAME_END:
                 break;
@@ -368,7 +505,8 @@ static int l_dbg_go(lua_State *L)
 
 // dbg.wait(frames) waits until the emulation stops and returns a table
 // describing why: {reason = "breakpoint", "tap", "exception", "halt",
-// "step" or "pause", pc = ..., id = ..., address = ...}. If frames is given and the
+// "step", "copper_breakpoint", "copper_watchpoint", "beam" or "pause",
+// pc = ..., id = ..., address = ...}. If frames is given and the
 // emulation has not stopped after that many frames, nothing is returned.
 static int l_dbg_wait(lua_State *L)
 {
@@ -394,10 +532,153 @@ static int l_dbg_stopped(lua_State *L)
     return 1;
 }
 
+static int add_chip_guard(lua_State *L, chip_guard_kind kind, u32 target, int callback_arg)
+{
+    lua_chip_guard guard;
+    guard.id = g_next_id++;
+    guard.kind = kind;
+    guard.target = target;
+    guard.callback = LUA_NOREF;
+    guard.last_frame = -1;
+    if (!lua_isnoneornil(L, callback_arg)) {
+        luaL_checktype(L, callback_arg, LUA_TFUNCTION);
+        lua_settop(L, callback_arg);
+        guard.callback = luaL_ref(L, LUA_REGISTRYINDEX);
+    }
+    g_chip_guards.push_back(guard);
+    update_core_chip_guards(kind);
+    lua_pushinteger(L, guard.id);
+    return 1;
+}
+
+// Removes the chip guard with the id, or all of them, of the kinds from
+// first to last.
+static int clear_chip_guards(lua_State *L, chip_guard_kind first, chip_guard_kind last)
+{
+    bool all = lua_isnoneornil(L, 1);
+    lua_Integer id = all ? 0 : luaL_checkinteger(L, 1);
+    for (size_t i = g_chip_guards.size(); i > 0; i--) {
+        const lua_chip_guard &guard = g_chip_guards[i - 1];
+        if (guard.kind >= first && guard.kind <= last && (all || guard.id == id)) {
+            luaL_unref(L, LUA_REGISTRYINDEX, guard.callback);
+            g_chip_guards.erase(g_chip_guards.begin() + i - 1);
+        }
+    }
+    for (int kind = first; kind <= last; kind++) {
+        update_core_chip_guards((chip_guard_kind) kind);
+    }
+    return 0;
+}
+
+// dbg.copper_break(address, callback) sets a breakpoint for the copper, at
+// the address of an instruction in a copper list, and returns its id.
+// Without a callback, the emulation stops when the copper gets there. With
+// one, callback(address) is called and the emulation continues, unless the
+// callback calls emu.pause.
+static int l_dbg_copper_break(lua_State *L)
+{
+    lua_Integer address = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, address >= 0 && address <= 0xffffffffLL, 1, "address out of range");
+    return add_chip_guard(L, COPPER_BREAKPOINT, (u32) address, 2);
+}
+
+// dbg.copper_watch(register, callback) does the same when the copper writes
+// a custom chip register, given by its address (mem.custom.COLOR00). The
+// callback is called as callback(register).
+static int l_dbg_copper_watch(lua_State *L)
+{
+    lua_Integer address = luaL_checkinteger(L, 1);
+    luaL_argcheck(
+        L, address >= 0xdff000 && address <= 0xdff1fe && address % 2 == 0, 1,
+        "must be the address of a custom chip register");
+    return add_chip_guard(L, COPPER_WATCHPOINT, (u32) address, 2);
+}
+
+// dbg.copper_clear(id) removes a copper breakpoint or watch, and
+// dbg.copper_clear() removes all of them.
+static int l_dbg_copper_clear(lua_State *L)
+{
+    return clear_chip_guards(L, COPPER_BREAKPOINT, COPPER_WATCHPOINT);
+}
+
+// dbg.beam_break(line, position, callback) sets a breakpoint for the beam:
+// a raster line and a horizontal position in colour clocks (default 0), as
+// emu.beam gives them. It is reached once per frame. The callback is called
+// as callback(line, position).
+static int l_dbg_beam_break(lua_State *L)
+{
+    lua_Integer line = luaL_checkinteger(L, 1);
+    bool has_position = lua_type(L, 2) == LUA_TNUMBER;
+    lua_Integer position = has_position ? luaL_checkinteger(L, 2) : 0;
+    luaL_argcheck(L, line >= 0 && line <= 312, 1, "must be 0 to 312");
+    luaL_argcheck(L, position >= 0 && position <= 226, 2, "must be 0 to 226");
+    return add_chip_guard(
+        L, BEAM_BREAKPOINT, (u32) (line << 16 | position), has_position ? 3 : 2);
+}
+
+// dbg.beam_clear(id) removes a beam breakpoint, dbg.beam_clear() all.
+static int l_dbg_beam_clear(lua_State *L)
+{
+    return clear_chip_guards(L, BEAM_BREAKPOINT, BEAM_BREAKPOINT);
+}
+
+// dbg.copper() returns the state of the copper: {pc = ..., cop1lc = ...,
+// cop2lc = ...}. pc is the address of the instruction it is running or
+// waiting at.
+static int l_dbg_copper(lua_State *L)
+{
+    CopperInfo info = core().agnus.copper.cacheInfo();
+    lua_createtable(L, 0, 3);
+    lua_pushinteger(L, info.coppc0);
+    lua_setfield(L, -2, "pc");
+    lua_pushinteger(L, info.cop1lc);
+    lua_setfield(L, -2, "cop1lc");
+    lua_pushinteger(L, info.cop2lc);
+    lua_setfield(L, -2, "cop2lc");
+    return 1;
+}
+
+// dbg.copper_disasm(address, count) returns a list with a table for each
+// copper instruction from the address: {address = ..., words = {first,
+// second}, text = "..."}. An instruction is four bytes.
+static int l_dbg_copper_disasm(lua_State *L)
+{
+    lua_Integer address = luaL_checkinteger(L, 1);
+    lua_Integer count = luaL_optinteger(L, 2, 1);
+    luaL_argcheck(L, address >= 0 && address <= 0xffffffffLL, 1, "address out of range");
+    luaL_argcheck(L, count >= 1 && count <= 10000, 2, "invalid count");
+    const CopperDebugger &debugger = core().agnus.copper.debugger;
+    lua_createtable(L, (int) count, 0);
+    for (lua_Integer i = 0; i < count; i++) {
+        u32 at = (u32) address + 4 * (u32) i;
+        std::string text = debugger.disassemble(at, true);
+        lua_createtable(L, 0, 3);
+        lua_pushinteger(L, at);
+        lua_setfield(L, -2, "address");
+        lua_createtable(L, 2, 0);
+        lua_pushinteger(L, peek_u16(at));
+        lua_rawseti(L, -2, 1);
+        lua_pushinteger(L, peek_u16(at + 2));
+        lua_rawseti(L, -2, 2);
+        lua_setfield(L, -2, "words");
+        lua_pushstring(L, text.c_str());
+        lua_setfield(L, -2, "text");
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
 static const luaL_Reg dbg_functions[] = {
+    {"beam_break", l_dbg_beam_break},
+    {"beam_clear", l_dbg_beam_clear},
     {"bpclear", l_dbg_bpclear},
     {"bplist", l_dbg_bplist},
     {"bpset", l_dbg_bpset},
+    {"copper", l_dbg_copper},
+    {"copper_break", l_dbg_copper_break},
+    {"copper_clear", l_dbg_copper_clear},
+    {"copper_disasm", l_dbg_copper_disasm},
+    {"copper_watch", l_dbg_copper_watch},
     {"exclear", l_dbg_exclear},
     {"exset", l_dbg_exset},
     {"go", l_dbg_go},
@@ -651,6 +932,7 @@ void engine_debug_free(void)
 {
     g_taps.clear();
     update_memory_observer();
+    g_chip_guards.clear();
     g_breakpoints.clear();
     g_exception_watches.clear();
     g_step_instructions = 0;

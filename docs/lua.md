@@ -189,19 +189,55 @@ The registers are fields which can be read and assigned: `cpu.d0` to `cpu.d7`, `
 | `dbg.wait(frames)` | Wait until the emulation stops and return a table saying why. With `frames`, give up after that many frames and return nothing. |
 | `dbg.step(n)` | Run `n` instructions (default 1) and stop. Returns the same as `dbg.wait`. |
 | `dbg.stopped()` | The same table as `dbg.wait` returns if the emulation is stopped, otherwise false. |
+| `dbg.copper_break(address, f)` | Set a breakpoint for the copper at an instruction of a copper list (see below). |
+| `dbg.copper_watch(register, f)` | Stop or call `f(register)` when the copper writes a custom chip register. |
+| `dbg.copper_clear(id)` | Remove a copper breakpoint or watch, or all of them when called without an id. |
+| `dbg.copper()` | The state of the copper: `{pc = ..., cop1lc = ..., cop2lc = ...}`. |
+| `dbg.copper_disasm(address, count)` | A list of copper instructions: `{address = ..., words = {first, second}, text = "..."}`. |
+| `dbg.beam_break(line, position, f)` | Set a breakpoint for a position of the beam (see below). |
+| `dbg.beam_clear(id)` | Remove a beam breakpoint, or all of them when called without an id. |
 | `dbg.measure(from, to, count, frames)` | Measure the time from one address to another (see below). |
 | `dbg.load_symbols(path, name, frames)` | Load the symbols of a running program (see below). |
 | `dbg.symbol(name)` | The address of a symbol, or nil. |
 | `dbg.lookup(address)` | The name for an address inside a loaded program, such as `"update"` or `"update+$1a"`, or nil. |
 | `dbg.unload_symbols(name)` | Forget the symbols of a program, or of all programs when called without a name. |
 
-The table from `dbg.wait` has `reason` (`"breakpoint"`, `"tap"`, `"step"`, `"exception"`, `"halt"`
-or `"pause"`) and `pc`. For breakpoints, taps and exceptions it also has `id` and `address`, and
-for exceptions and halts `vector`.
+The table from `dbg.wait` has `reason` (`"breakpoint"`, `"tap"`, `"step"`, `"exception"`,
+`"halt"`, `"copper_breakpoint"`, `"copper_watchpoint"`, `"beam"` or `"pause"`) and `pc`. For
+breakpoints, taps and exceptions it also has `id` and `address`, and for exceptions and halts
+`vector`.
 
 A breakpoint stops the emulation *before* the instruction at its address is run. A breakpoint
 callback costs about 13 microseconds, so a breakpoint in a loop which runs a thousand times per
 frame is no problem, and one in the innermost loop of a program is noticeable.
+
+#### The copper and the beam
+
+These stop the emulation, or call a function, for something the custom chips do instead of
+something the CPU does:
+
+```lua
+dbg.copper_break(0x21f40)                    -- the copper gets to this instruction
+dbg.copper_watch(mem.custom.BPLCON0)         -- the copper writes this register
+dbg.beam_break(44, 0)                        -- the beam gets to the start of line 44
+dbg.beam_break(150, 100, function(line, position)
+    print(line, position, cpu.pc)            -- where the CPU is at that point of every frame
+end)
+```
+
+- Like the other breakpoints, they stop the emulation when given no function. With one, the
+  function is called and the emulation continues, unless it calls `emu.pause()`.
+- The CPU finishes the instruction it is running first, so Lua code sees the machine a few
+  colour clocks after the copper or the beam got there. `emu.beam()` gives the exact position.
+  The copper may have run a few more instructions by then.
+- When several of them are reached during one CPU instruction, there is one stop.
+- `dbg.copper_break` takes the address of an instruction in a copper list. `dbg.copper()` gives
+  the addresses of the lists (`cop1lc` and `cop2lc`) and `dbg.copper_disasm` shows them.
+- `dbg.copper_watch` takes the address of a register (`mem.custom.COLOR00`) and only sees writes
+  made by the copper. Use `mem.tap_write` for the writes of the CPU.
+- `dbg.beam_break` takes a raster line (0 to 312) and a horizontal position in colour clocks (0
+  to 226, default 0), which are what `emu.beam()` returns. It is reached once per frame. In the
+  stop information, `address` is the line times 65536 plus the position.
 
 #### Measuring time
 
@@ -376,6 +412,18 @@ Patch a game while it runs: give the player more lives whenever the counter is w
 
 ```lua
 mem.tap_write(0x3c012, 0x3c013, function() return 9 end)
+```
+
+Find the copper instruction which sets the background colour, and show the list around it:
+
+```lua
+dbg.copper_watch(mem.custom.COLOR00, function() emu.pause() end)
+dbg.wait()
+dbg.copper_clear()
+local copper = dbg.copper()
+for _, line in ipairs(dbg.copper_disasm(copper.cop1lc, 20)) do
+    print(string.format("%08x  %s", line.address, line.text))
+end
 ```
 
 Stop when the program crashes, and say where:
