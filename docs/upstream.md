@@ -22,8 +22,8 @@ Accesses to the program space (instruction fetches and PC-relative operands) are
 With no observer set, the cost is one test of a pointer per access; no difference in speed could
 be measured.
 
-Worth offering upstream as it is. To update the core, rebase the branch on the new commit of
-Silicium and move the submodule.
+Worth offering upstream as it is. To update the core, merge the `main` branch of Silicium into
+the `vamiga-lua` branch of the fork, push it, and move the submodule to the merge.
 
 ## Found in the core, not changed
 
