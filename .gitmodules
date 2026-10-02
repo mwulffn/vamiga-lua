@@ -1,0 +1,3 @@
+[submodule "extern/silicium"]
+	path = extern/silicium
+	url = https://github.com/dirkwhoffmann/silicium.git
